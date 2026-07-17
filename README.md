@@ -2,8 +2,8 @@
 
 A small falling-sand sandbox: a cellular automaton where the canvas is a grid
 of cells and every frame each cell moves by a few simple rules. Powders pile
-up, liquids pool and level out, gases rise and fade, and some materials react
-when they touch.
+up, liquids pool and level out, gases rise, and a lot of things react when
+they touch.
 
 It ships two ways from the same code: a plain web page with no dependencies
 and no build step, and a native desktop app that wraps that page. The physics
@@ -11,14 +11,60 @@ lives once, in `main.js`.
 
 ## Materials
 
-- Sand falls and forms slopes.
+Terrain and solids:
+
+- Sand falls and forms slopes. Hot enough fire, lava, or molten metal fuses
+  it into glass.
+- Dirt is soil. It soaks up touching water and darkens; ash settling on it
+  enriches it further.
+- Stone and wood stay put. Wood is fuel and burns down to ash and smoke.
+- Glass is solid and clear, but brittle: a boulder dropped on it, or any
+  explosion nearby, shatters it into a pile of shards.
+- Boulders fall straight down, punch through plants, and are what you drop
+  on glass when you want shards.
+- Metal holds its shape and conducts heat. Flame makes it glow; medium or
+  high flame eventually melts it into molten metal. Left standing in water
+  it slowly rusts away.
+
+Liquids:
+
 - Water runs downhill and spreads until it finds its level.
-- Oil is lighter than water, so it floats on top. It also burns.
-- Stone and wood stay put. Wood is fuel.
-- Fire spreads through anything flammable, then dies down into smoke.
-- Plant creeps along water.
-- Water thrown on fire flashes into steam, which drifts up and condenses back
-  into water.
+- Oil is lighter than water, so it floats on top. It also burns hard.
+- Lava sets fire to whatever can burn, turns sand to glass, and skins over
+  into stone where it meets water.
+- Molten metal behaves like lava but cools back into solid metal, and
+  quenches instantly when it hits water.
+- Nitroglycerin is a liquid that explodes: from fire, or just from being
+  dropped far enough.
+
+Fire and explosives:
+
+- Fire spreads through anything flammable and dies down into smoke. The
+  flame heat control sets how hot you paint it: low is a lazy orange flame,
+  medium melts metal slowly, high burns blue and fuses sand into glass.
+- Gunpowder catches instantly and flashes down a trail with little pops.
+- TNT sits inert until flame or a blast reaches it, then its fuse lights,
+  it flashes, and it blows a crater. Stacks chain with a ripple.
+
+Life:
+
+- Seeds fall, and on wet or enriched dirt they germinate into plants.
+  Enriched soil grows taller plants.
+- Plants breathe in nearby smoke, and every breath feeds a little more
+  growth. They also vine slowly through water.
+- Smoke does not just vanish; it hangs in the air for a long while unless
+  plants drink it. Steam rises, cools on stone and glass, and drips back
+  down as water.
+
+So there is a full cycle in there if you set it up: fire makes smoke and
+ash, ash enriches the dirt, plants eat the smoke and grow, water evaporates
+over flame and rains back off the ceiling. A little 2D terrarium.
+
+Exotic:
+
+- A black hole sits where you put it and pulls loose material in from a
+  distance. Anchored things resist the pull, but nothing survives touching
+  it. Placing one is a decision.
 
 ## Run it in a browser
 
@@ -53,19 +99,28 @@ semicolon, so use `--add-data "index.html:."` and so on. The binary lands in
 
 - Drag on the canvas to draw the selected material.
 - Right-click and drag to erase.
-- Number keys 1 to 7 pick a material, 0 is the eraser.
+- Number keys pick the common materials, 0 is the eraser.
 - Space pauses and resumes.
-- The slider sets the brush size.
+- The slider sets the brush size, the flame heat chips set how hot fire
+  paints.
+- The brush only paints into open space. Fire has to reach fuel through the
+  physics, so lay a trail and light one end instead of stamping flame over
+  things.
 
 ## How it works
 
-The grid is a flat `Uint8Array` of material ids. Each step walks the grid from
+The grid is a flat `Uint8Array` of material ids, with two side arrays for
+per-cell state: a timer (burn time, gas lifetime, fuses) and a scratch value
+(flame heat, metal temperature, soil wetness). Each step walks the grid from
 the bottom up so falling cells are not processed twice, and alternates the
 left-to-right scan direction every frame to keep piles roughly symmetric.
+
 Movement comes down to a rough density per material: a cell can swap into a
 neighbour that is empty or a lighter fluid. That one rule gives you sand
-sinking through water and oil floating on top for free. Fire, steam, and
-plants add the small bit of chemistry on top.
+sinking through water and oil floating on top for free. Reactions are local:
+each cell only ever looks at its eight neighbours. Explosions found during a
+scan are queued and applied after it, so a blast does not interfere with the
+pass that discovered it.
 
 ## License
 

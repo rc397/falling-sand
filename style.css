@@ -59,7 +59,7 @@ canvas {
 }
 
 .panel {
-  flex: 0 0 220px;
+  flex: 0 0 240px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -72,7 +72,41 @@ canvas {
 .materials {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  gap: 6px;
+}
+
+.group-label {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.group-label:first-child { margin-top: 0; }
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chips button {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #171720;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chips button:hover { border-color: #3a3a48; }
+
+.chips button.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .materials button {
