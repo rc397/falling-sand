@@ -85,8 +85,13 @@ Fire and explosives:
   chain in ripples.
 - C4 ignores fire entirely; only a blast sets it off, so you can shape a
   charge and detonate it on purpose.
-- Thermite does not explode at all. It burns at 2600 K and eats through
-  metal plate like it is not there.
+- Magnesium takes a light from any open flame and burns blinding white at
+  3100 K. Water does not put it out; it strips the oxygen and frees
+  hydrogen, which then pops.
+- Thermite does not explode at all, and ordinary flame will not wake it
+  either; it is very hard to light. Pour magnesium on the pile and light
+  the magnesium. Once burning, it holds 2600 K and eats through metal
+  plate like it is not there.
 - Fireworks climb and burst into coloured sparks.
 - Uranium is the big one. It sits warm to the touch and needs a real
   detonator: a blast or serious sustained heat. Push it critical and it

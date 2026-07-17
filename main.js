@@ -54,6 +54,7 @@ const C4     = 31;
 const FIREWORK = 32;
 const SPARK  = 33;
 const THERMITE = 34;
+const MAGNESIUM = 35;
 
 // Pseudo materials for the brush only; they never land in the grid.
 const TOOL_HEAT = 250;
@@ -78,6 +79,7 @@ const DENSITY = {
   [SHARD]:  9,
   [ASH]:    9,
   [THERMITE]: 9,
+  [MAGNESIUM]: 9,
   [SAND]:  10,
   [DIRT]:  10,
   [SEED]:  10,
@@ -136,6 +138,7 @@ const COLORS = {
   [FIREWORK]: [196, 84, 64],
   [SPARK]: [255, 200, 120],
   [THERMITE]: [152, 140, 128],
+  [MAGNESIUM]: [190, 194, 200],
 };
 
 // Spark burst colours, picked per firework and stored in aux.
@@ -150,7 +153,8 @@ const SPARK_HUES = [
 const CONDUCT = {
   [METAL]: 0.45, [MOLTEN]: 0.35, [PLASMA]: 0.4, [LAVA]: 0.3, [FIRE]: 0.3,
   [WATER]: 0.28, [ICE]: 0.25, [OIL]: 0.2, [NITRO]: 0.2, [STEAM]: 0.2,
-  [URANIUM]: 0.2, [SPARK]: 0.2, [SMOKE]: 0.15, [HYDROGEN]: 0.15,
+  [URANIUM]: 0.2, [SPARK]: 0.2, [MAGNESIUM]: 0.2, [SMOKE]: 0.15,
+  [HYDROGEN]: 0.15,
   [THERMITE]: 0.15, [SAND]: 0.12, [HELIUM]: 0.12, [DIRT]: 0.1, [RUST]: 0.1,
   [PLANT]: 0.1, [GUNPOWDER]: 0.1, [CARBON]: 0.1, [STARDUST]: 0.1,
   [ASH]: 0.08, [SHARD]: 0.08, [BOULDER]: 0.08, [STONE]: 0.06, [SEED]: 0.06,
@@ -203,6 +207,7 @@ const MATERIALS = [
   { id: GUNPOWDER, name: 'Gunpowder', group: 'Boom' },
   { id: TNT,    name: 'TNT',    key: '9', group: 'Boom' },
   { id: C4,     name: 'C4',     group: 'Boom' },
+  { id: MAGNESIUM, name: 'Magnesium', group: 'Boom' },
   { id: THERMITE, name: 'Thermite', group: 'Boom' },
   { id: FIREWORK, name: 'Firework', group: 'Boom' },
   { id: URANIUM, name: 'Uranium', group: 'Boom' },
@@ -390,9 +395,14 @@ function applyPhase(x, y, i) {
       if (k > 1300 && Math.random() < 0.05) { morph(i, LAVA); return true; }
       return false;
     case THERMITE:
-      // Does not explode, it just starts its own private sun. The burn is
-      // handled in updateThermite; this only strikes the match.
-      if (k > 900 && aux[i] === 0) { aux[i] = 1; life[i] = 100 + (Math.random() * 50 | 0); }
+      // Very hard to light: flame does not do it, and 2000 K is beyond what
+      // a single torch can push into a pile. Burning magnesium is the
+      // intended match. The burn itself is handled in updateThermite.
+      if (k > 2000 && aux[i] === 0) { aux[i] = 1; life[i] = 100 + (Math.random() * 50 | 0); }
+      return false;
+    case MAGNESIUM:
+      // Lava, molten metal, or any decent heat source sets it off too.
+      if (k > 900 && aux[i] === 0) { aux[i] = 1; life[i] = 90 + (Math.random() * 40 | 0); }
       return false;
     case NITRO:
       if (k > 450) { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 6 }); return true; }
@@ -564,11 +574,11 @@ function updateFire(x, y, i) {
       if (t === GUNPOWDER && Math.random() < 0.05) {
         blasts.push({ x: x + dx, y: y + dy, r: 3 });
       }
-    } else if (t === THERMITE && aux[n] === 0 && Math.random() < 0.1) {
-      // Open flame is enough to strike thermite; from there its own heat
-      // carries the burn through the pile.
+    } else if (t === MAGNESIUM && aux[n] === 0 && Math.random() < 0.15) {
+      // Magnesium takes a light readily. It is the match for thermite,
+      // which ordinary flame will not wake.
       aux[n] = 1;
-      life[n] = 100 + (Math.random() * 50 | 0);
+      life[n] = 90 + (Math.random() * 40 | 0);
     }
   }
 
@@ -762,6 +772,34 @@ function updateUranium(x, y, i) {
   // a blast or enough heat and applyPhase turns it into a very bad day.
   temp[i] += 0.4;
   updatePowder(x, y, i, URANIUM);
+}
+
+function updateMagnesium(x, y, i) {
+  if (aux[i] === 1) {
+    // Burning: blinding white and hotter than anything but a star. Water
+    // does not put it out; it strips the oxygen and frees hydrogen, which
+    // is how you learn not to hose down a magnesium fire.
+    temp[i] = 3100;
+    for (const [dx, dy] of NEIGHBORS) {
+      if (!inBounds(x + dx, y + dy)) continue;
+      const n = i + dy * W + dx;
+      const t = cells[n];
+      if (t === WATER && Math.random() < 0.15) {
+        morph(n, HYDROGEN);
+        temp[n] = 800;
+      } else if (t === THERMITE && aux[n] === 0 && Math.random() < 0.15) {
+        // Direct contact with burning magnesium is what lights thermite.
+        aux[n] = 1;
+        life[n] = 100 + (Math.random() * 50 | 0);
+      }
+    }
+    if ((frame & 3) === 0 && --life[i] === 0) {
+      morph(i, Math.random() < 0.6 ? ASH : EMPTY);
+      return;
+    }
+    return;
+  }
+  updatePowder(x, y, i, MAGNESIUM);
 }
 
 function updateThermite(x, y, i) {
@@ -1072,6 +1110,7 @@ function step() {
         case BOULDER: updatePowder(x, y, i, cells[i]); break;
         case URANIUM: updateUranium(x, y, i); break;
         case THERMITE: updateThermite(x, y, i); break;
+        case MAGNESIUM: if (aux[i] === 1) emberCount += 2; updateMagnesium(x, y, i); break;
         case DIRT:  updateDirt(x, y, i); break;
         case SEED:  updateSeed(x, y, i); break;
         case WATER: updateLiquid(x, y, i, WATER); break;
@@ -1166,6 +1205,10 @@ function render() {
     } else if (type === THERMITE && aux[i] === 1) {
       const f = Math.random() * 80 | 0;
       r = 255; g = clamp(200 + f); b = clamp(160 + f);
+    } else if (type === MAGNESIUM && aux[i] === 1) {
+      // Do not look directly at it.
+      const f = Math.random() * 30 | 0;
+      r = 255; g = clamp(235 + f); b = clamp(225 + f);
     } else if (type === TNT && aux[i] === 1 && (frame & 4)) {
       r = 255; g = 240; b = 200; // lit fuse flashing
     } else if (type === DIRT) {
