@@ -55,6 +55,7 @@ const FIREWORK = 32;
 const SPARK  = 33;
 const THERMITE = 34;
 const MAGNESIUM = 35;
+const NEUTRONIUM = 36;
 
 // Pseudo materials for the brush only; they never land in the grid.
 const TOOL_HEAT = 250;
@@ -89,6 +90,7 @@ const DENSITY = {
   [URANIUM]: 18,
   [MOLTEN]: 20,
   [BOULDER]: 60,
+  [NEUTRONIUM]: 80,
   [PLANT]: 90,
   [WOOD]:  99,
   [STONE]: 99,
@@ -139,6 +141,7 @@ const COLORS = {
   [SPARK]: [255, 200, 120],
   [THERMITE]: [152, 140, 128],
   [MAGNESIUM]: [190, 194, 200],
+  [NEUTRONIUM]: [214, 228, 255],
 };
 
 // Spark burst colours, picked per firework and stored in aux.
@@ -151,6 +154,7 @@ const SPARK_HUES = [
 // what EMPTY does depends on the ambient setting (air on Earth, vacuum in
 // space).
 const CONDUCT = {
+  [NEUTRONIUM]: 0.5,
   [METAL]: 0.45, [MOLTEN]: 0.35, [PLASMA]: 0.4, [LAVA]: 0.3, [FIRE]: 0.3,
   [WATER]: 0.28, [ICE]: 0.25, [OIL]: 0.2, [NITRO]: 0.2, [STEAM]: 0.2,
   [URANIUM]: 0.2, [SPARK]: 0.2, [MAGNESIUM]: 0.2, [SMOKE]: 0.15,
@@ -214,6 +218,7 @@ const MATERIALS = [
   { id: STARDUST, name: 'Stardust', group: 'Space' },
   { id: HYDROGEN, name: 'Hydrogen', group: 'Space' },
   { id: HELIUM, name: 'Helium', group: 'Space' },
+  { id: NEUTRONIUM, name: 'Neutronium', group: 'Space' },
   { id: BLACKHOLE, name: 'Black hole', group: 'Space' },
   { id: TOOL_HEAT, name: 'Heat', group: 'Tools' },
   { id: TOOL_COOL, name: 'Cool', group: 'Tools' },
@@ -897,7 +902,8 @@ function updatePlasma(x, y, i) {
   for (const [dx, dy] of NEIGHBORS) {
     if (!inBounds(x + dx, y + dy)) continue;
     const n = i + dy * W + dx;
-    if (cells[n] === HYDROGEN) {
+    const t = cells[n];
+    if (t === HYDROGEN) {
       fed = true;
       // Fusion: hydrogen in, helium and heat out. Only some of the fuel
       // joins the star itself, so a cloud leaves a helium shell behind.
@@ -905,6 +911,12 @@ function updatePlasma(x, y, i) {
         morph(n, Math.random() < 0.35 ? PLASMA : HELIUM);
         temp[i] = Math.min(temp[i] + 500, 10000);
       }
+    } else if (t !== EMPTY && t !== PLASMA && t !== BLACKHOLE && t !== NEUTRONIUM && Math.random() < 0.08) {
+      // Accretion. Whatever else falls in becomes more star, which is how
+      // you feed one toward collapse.
+      fed = true;
+      morph(n, PLASMA);
+      temp[n] = 6000;
     }
   }
 
@@ -928,6 +940,24 @@ function updatePlasma(x, y, i) {
   if (fed) life[i] = Math.min(life[i] + 2, 250);
 
   if (gravityMode !== 'down') drift(x, y, i);
+}
+
+function updateNeutronium(x, y, i) {
+  // Degenerate matter. Anything loose that touches it is crushed onto the
+  // surface, which is how you overfeed a neutron star into a black hole.
+  for (const [dx, dy] of NEIGHBORS) {
+    if (!inBounds(x + dx, y + dy)) continue;
+    const n = i + dy * W + dx;
+    const t = cells[n];
+    if (t !== EMPTY && t !== NEUTRONIUM && t !== BLACKHOLE && t !== PLASMA &&
+        isLoose(t) && !isGas(t) && Math.random() < 0.01) {
+      // Gas drifts past; it is dense stuff landing on the surface that
+      // builds a neutron star toward its limit.
+      morph(n, NEUTRONIUM);
+      temp[n] = Math.min(temp[n] + 800, 6000); // accretion heating
+    }
+  }
+  updatePowder(x, y, i, NEUTRONIUM);
 }
 
 // Turn a glass cell and its glassy neighbourhood into shards.
@@ -954,7 +984,8 @@ function applyBlast(bx, by, r) {
       const d2 = dx * dx + dy * dy;
       const i = y * W + x;
       const t = cells[i];
-      if (t === BLACKHOLE) continue;
+      // Black holes shrug, and degenerate matter does not blow apart.
+      if (t === BLACKHOLE || t === NEUTRONIUM) continue;
 
       // Glass shatters out to well past the fireball.
       if (t === GLASS && d2 <= r2 * 2) { morph(i, SHARD); continue; }
@@ -985,16 +1016,21 @@ function applyBlast(bx, by, r) {
 }
 
 // Drag loose material toward each black hole and eat whatever touches it.
+// Eating grows the hole: its mass lives in life[], its horizon and reach
+// scale with it, and its gravity gets heavier. A hole with nothing left to
+// eat evaporates by Hawking radiation, and the end of that is a flash that
+// gives the mass back as heat and light particles. Nothing remains.
 function feedBlackHoles() {
-  const R = 14;
   for (const bh of holes) {
     const hx = bh.x, hy = bh.y;
     const hi = hy * W + hx;
-    for (const [dx, dy] of NEIGHBORS) {
-      if (!inBounds(hx + dx, hy + dy)) continue;
-      const n = hi + dy * W + dx;
-      if (cells[n] !== EMPTY && cells[n] !== BLACKHOLE) morph(n, EMPTY);
-    }
+    if (cells[hi] !== BLACKHOLE) continue;
+    const mass = life[hi];
+    const horizon = 2.4 + mass / 40;
+    const h2 = horizon * horizon;
+    const R = 14 + (mass >> 4);
+    let ate = false;
+
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {
         const x = hx + dx, y = hy + dy;
@@ -1002,14 +1038,41 @@ function feedBlackHoles() {
         const d2 = dx * dx + dy * dy;
         if (d2 > R * R) continue;
         const i = y * W + x;
-        if (!isLoose(cells[i])) continue;
-        // Inside the accretion zone nothing escapes, loose or not falling.
-        if (d2 <= 6) {
-          if (Math.random() < 0.5) morph(i, EMPTY);
+        // Everything inside the horizon goes in, anchored or not.
+        if (d2 <= h2) {
+          if (cells[i] !== EMPTY && cells[i] !== BLACKHOLE) {
+            morph(i, EMPTY);
+            life[hi] = Math.min(life[hi] + 1, 255);
+            ate = true;
+          }
           continue;
         }
+        if (!isLoose(cells[i])) continue;
         if (Math.random() > 4 / Math.sqrt(d2 + 1)) continue;
         pullToward(i, x, y, hx, hy, d2 < 64 ? 2 : 1);
+      }
+    }
+
+    if (ate) {
+      aux[hi] = 0;
+    } else if ((frame % 3) === 0 && ++aux[hi] >= 250) {
+      // Starved long enough: the evaporation runs away. Bigger holes go
+      // out harder.
+      const m = life[hi];
+      morph(hi, EMPTY);
+      const burst = 6 + (m / 10 | 0);
+      blasts.push({ x: hx, y: hy, r: burst });
+      for (let k = 0; k < m + 20; k++) {
+        const a = Math.random() * 6.2832;
+        const d = 2 + Math.random() * burst;
+        const x = (hx + Math.cos(a) * d) | 0, y = (hy + Math.sin(a) * d) | 0;
+        if (!inBounds(x, y)) continue;
+        const n = y * W + x;
+        if (cells[n] !== EMPTY) continue;
+        const roll = Math.random();
+        morph(n, roll < 0.4 ? SPARK : roll < 0.75 ? HYDROGEN : HELIUM);
+        if (cells[n] === SPARK) aux[n] = 5;
+        temp[n] = 3000;
       }
     }
   }
@@ -1052,8 +1115,12 @@ function rebuildField() {
   for (let y = 0; y < H; y++) {
     const by = (y / CB) | 0;
     for (let x = 0; x < W; x++) {
-      const t = cells[y * W + x];
-      if (t !== EMPTY) massGrid[by * CW + ((x / CB) | 0)] += massOf(t);
+      const i = y * W + x;
+      const t = cells[i];
+      if (t === EMPTY) continue;
+      // Compact objects punch far above their cell count.
+      const m = t === BLACKHOLE ? 60 + life[i] * 4 : t === NEUTRONIUM ? 300 : massOf(t);
+      massGrid[by * CW + ((x / CB) | 0)] += m;
     }
   }
   for (let a = 0; a < CW * CH; a++) {
@@ -1103,6 +1170,99 @@ function applyMutualGravity() {
   }
 }
 
+// --- stellar bookkeeping -------------------------------------------------------
+
+// Plasma and neutronium are tallied per coarse block during the scan, so a
+// star is just a connected clump of blocks. That gives each star a mass to
+// judge collapse by and a place to hang its fuel bar.
+const plasmaCount = new Uint16Array(CW * CH);
+const plasmaFuel = new Float32Array(CW * CH);
+const neutCount = new Uint16Array(CW * CH);
+let starBars = [];
+
+function coarseClusters(count, fuel, minPer) {
+  const seen = new Uint8Array(count.length);
+  const out = [];
+  for (let b = 0; b < count.length; b++) {
+    if (seen[b] || count[b] < minPer) continue;
+    let sum = 0, fsum = 0, wx = 0, wy = 0, minX = 1e9, maxX = -1, minY = 1e9;
+    const stack = [b];
+    seen[b] = 1;
+    while (stack.length) {
+      const c = stack.pop();
+      const cx = c % CW, cy = (c / CW) | 0;
+      sum += count[c];
+      if (fuel) fsum += fuel[c];
+      wx += cx * count[c]; wy += cy * count[c];
+      if (cx < minX) minX = cx;
+      if (cx > maxX) maxX = cx;
+      if (cy < minY) minY = cy;
+      if (cx > 0 && !seen[c - 1] && count[c - 1] >= minPer) { seen[c - 1] = 1; stack.push(c - 1); }
+      if (cx < CW - 1 && !seen[c + 1] && count[c + 1] >= minPer) { seen[c + 1] = 1; stack.push(c + 1); }
+      if (cy > 0 && !seen[c - CW] && count[c - CW] >= minPer) { seen[c - CW] = 1; stack.push(c - CW); }
+      if (cy < CH - 1 && !seen[c + CW] && count[c + CW] >= minPer) { seen[c + CW] = 1; stack.push(c + CW); }
+    }
+    out.push({ sum: sum, fuel: fuel ? fsum / (sum * 250) : 0, cx: wx / sum, cy: wy / sum, minX: minX, maxX: maxX, minY: minY });
+  }
+  return out;
+}
+
+// A star past critical mass collapses: the core degenerates into
+// neutronium and the envelope blows off as a hot expanding nebula.
+function supernova(cx, cy, sum) {
+  const R = Math.sqrt(sum) / 1.3 + 10;
+  const R2 = R * R;
+  for (let y = Math.max(0, (cy - R) | 0); y < Math.min(H, cy + R + 1); y++) {
+    for (let x = Math.max(0, (cx - R) | 0); x < Math.min(W, cx + R + 1); x++) {
+      const dx = x - cx, dy = y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > R2) continue;
+      const i = y * W + x;
+      if (cells[i] !== PLASMA) continue;
+      if (d2 <= 16) {
+        morph(i, NEUTRONIUM);
+        temp[i] = 5000;
+      } else {
+        // Hot, but below hydrogen's ignition point, or the envelope would
+        // just burn itself straight back into the star it came from.
+        const roll = Math.random();
+        morph(i, roll < 0.4 ? HELIUM : roll < 0.7 ? HYDROGEN : EMPTY);
+        temp[i] = 1200 + Math.random() * 1200;
+      }
+    }
+  }
+  blasts.push({ x: cx | 0, y: cy | 0, r: 24 });
+}
+
+// A neutron star past its own limit folds up without a bang. The bang
+// comes much later, when the black hole runs out of food.
+function collapseToBlackHole(cx, cy) {
+  for (let r = 0; r < 10; r++) {
+    for (let k = 0; k < 12; k++) {
+      const x = (cx + (Math.random() * 2 - 1) * r) | 0;
+      const y = (cy + (Math.random() * 2 - 1) * r) | 0;
+      if (!inBounds(x, y)) continue;
+      const i = y * W + x;
+      if (cells[i] === NEUTRONIUM) {
+        morph(i, BLACKHOLE);
+        life[i] = 140; // born heavy
+        return;
+      }
+    }
+  }
+}
+
+function checkStellarMass() {
+  const clusters = coarseClusters(plasmaCount, plasmaFuel, 6);
+  starBars = clusters.filter((c) => c.sum > 60);
+  for (const c of clusters) {
+    if (c.sum > 2200) supernova(c.cx * CB + CB / 2, c.cy * CB + CB / 2, c.sum);
+  }
+  for (const c of coarseClusters(neutCount, null, 4)) {
+    if (c.sum > 140) collapseToBlackHole((c.cx * CB + CB / 2) | 0, (c.cy * CB + CB / 2) | 0);
+  }
+}
+
 // --- main loop -----------------------------------------------------------------
 
 function step() {
@@ -1110,6 +1270,9 @@ function step() {
   holes.length = 0;
   fireCount = 0;
   emberCount = 0;
+  plasmaCount.fill(0);
+  plasmaFuel.fill(0);
+  neutCount.fill(0);
   for (let y = H - 1; y >= 0; y--) {
     // Alternate scan direction each frame so piles stay roughly symmetric.
     const leftFirst = (frame & 1) === 0;
@@ -1148,7 +1311,16 @@ function step() {
         case TNT:   updateTnt(x, y, i); break;
         case FIREWORK: updateFirework(x, y, i); break;
         case SPARK: fireCount++; updateSpark(x, y, i); break;
-        case PLASMA: emberCount += 4; updatePlasma(x, y, i); break;
+        case PLASMA:
+          emberCount += 4;
+          plasmaCount[(y >> 3) * CW + (x >> 3)]++;
+          plasmaFuel[(y >> 3) * CW + (x >> 3)] += life[i];
+          updatePlasma(x, y, i);
+          break;
+        case NEUTRONIUM:
+          neutCount[(y >> 3) * CW + (x >> 3)]++;
+          updateNeutronium(x, y, i);
+          break;
         case BLACKHOLE: holes.push({ x: x, y: y }); break;
       }
     }
@@ -1161,6 +1333,7 @@ function step() {
   blasts = [];
   for (const b of queued) applyBlast(b.x, b.y, b.r);
   feedBlackHoles();
+  if ((frame & 7) === 0) checkStellarMass();
   if (gravityMode === 'mutual') applyMutualGravity();
   flowHeat();
   frame++;
@@ -1177,6 +1350,52 @@ function heatColor(k) {
   if (t < 0.6)  { const u = (t - 0.35) / 0.25; return [128 + u * 127, 16 + u * 80, 32]; }
   if (t < 0.85) { const u = (t - 0.6) / 0.25;  return [255, 96 + u * 96, 32 + u * 32]; }
   const u = (t - 0.85) / 0.15; return [255, 192 + u * 63, 64 + u * 191];
+}
+
+// The movie version of a black hole: a black disc that grows with mass,
+// wrapped in a glowing accretion ring that slowly turns. When the hole is
+// starving toward its final burst, the ring pulses.
+function drawBlackHoles() {
+  for (const bh of holes) {
+    const i = bh.y * W + bh.x;
+    if (cells[i] !== BLACKHOLE) continue;
+    const m = life[i];
+    const rh = 2.4 + m / 40;
+    const dying = aux[i] > 180;
+    const pulse = dying ? 0.55 + 0.45 * Math.sin(frame * 0.4) : 1;
+    ctx.fillStyle = 'rgba(4, 2, 8, 0.95)';
+    ctx.beginPath();
+    ctx.arc(bh.x + 0.5, bh.y + 0.5, rh, 0, 6.2832);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 140, 40, ' + 0.35 * pulse + ')';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.arc(bh.x + 0.5, bh.y + 0.5, rh + 1.8, 0, 6.2832);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 195, 90, ' + 0.9 * pulse + ')';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.lineDashOffset = -frame * 0.35;
+    ctx.beginPath();
+    ctx.arc(bh.x + 0.5, bh.y + 0.5, rh + 0.9, 0, 6.2832);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// Each star wears its remaining fuel as a little bar overhead.
+function drawStarBars() {
+  for (const b of starBars) {
+    const x0 = b.minX * CB, x1 = Math.min((b.maxX + 1) * CB, W);
+    const bw = Math.min(x1 - x0, 44);
+    const bx = Math.max(1, Math.min(W - bw - 1, ((x0 + x1) / 2 - bw / 2) | 0));
+    const by = Math.max(1, b.minY * CB - 5);
+    ctx.fillStyle = 'rgba(8, 8, 14, 0.75)';
+    ctx.fillRect(bx, by, bw, 3);
+    const f = Math.max(0, Math.min(1, b.fuel));
+    ctx.fillStyle = f > 0.5 ? 'rgb(120, 220, 130)' : f > 0.25 ? 'rgb(235, 205, 95)' : 'rgb(235, 110, 80)';
+    ctx.fillRect(bx, by, Math.max(1, bw * f | 0), 3);
+  }
 }
 
 function render() {
@@ -1229,6 +1448,10 @@ function render() {
       // Do not look directly at it.
       const f = Math.random() * 30 | 0;
       r = 255; g = clamp(235 + f); b = clamp(225 + f);
+    } else if (type === NEUTRONIUM) {
+      // City-sized and spinning, so it pulses.
+      const p = 0.8 + 0.2 * Math.sin((frame + i) * 0.12);
+      r = clamp(214 * p + tint[i]); g = clamp(228 * p + tint[i]); b = 255;
     } else if (type === TNT && aux[i] === 1 && (frame & 4)) {
       r = 255; g = 240; b = 200; // lit fuse flashing
     } else if (type === DIRT) {
@@ -1252,6 +1475,8 @@ function render() {
     data[p] = r; data[p + 1] = g; data[p + 2] = b; data[p + 3] = 255;
   }
   ctx.putImageData(image, 0, 0);
+  drawBlackHoles();
+  drawStarBars();
 
   if (shake > 0) {
     const s = shake * 0.3;

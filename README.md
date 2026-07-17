@@ -47,6 +47,15 @@ the vacuum around it, and gutters out when the fuel runs dry. Stardust does
 the quieter version: it clumps, melts into a molten core, and crusts over
 into a rocky planet. Paint a cloud, raise the gravity, and wait.
 
+Stars also die the interesting way. Each one wears a fuel bar overhead, and
+a star eats: anything you feed it becomes more star. Push one past critical
+mass and it goes supernova, blowing its envelope off as a hot nebula and
+leaving a neutronium core. Feed the neutron star past its own limit and it
+folds silently into a black hole. The black hole grows with every meal, its
+disc and glowing ring swelling, and when it finally runs out of food it
+evaporates the way Hawking said it would: shrinking patience, then one last
+flash that hands the mass back as heat and light. Nothing is left after.
+
 ## Materials
 
 Terrain and solids:
@@ -104,8 +113,12 @@ Space:
 
 - Stardust is planet seed. Hydrogen is star fuel. Helium is what fusion
   leaves behind.
+- Neutronium is collapsed star core: absurdly dense, blast-proof, and it
+  crushes whatever touches it onto its surface. A big enough clump becomes
+  a black hole.
 - A black hole pulls loose matter in from a distance and eats whatever
-  touches it. One per click; one is plenty.
+  crosses its horizon, growing as it goes. Starve it and it evaporates,
+  ending in a burst sized to how fat it got. One per click; one is plenty.
 
 ## Run it in a browser
 
