@@ -9,8 +9,9 @@ Every cell also carries a temperature in kelvin. Heat conducts between
 neighbours, radiates toward the world's ambient temperature, and drives the
 chemistry: fire is just a very hot cell, ice is water that got cold, lava is
 rock that has not cooled down yet. Set the ambient to space and the world
-sits at absolute zero; vacuum does not conduct, so hot things out there cool
-only by radiating.
+sits at absolute zero, but hot things still shine: radiation needs no
+medium, so their heat crosses the vacuum, the space around them reads warm
+on the thermometer, and nearby objects slowly bake.
 
 It ships two ways from the same code: a plain web page with no dependencies
 and no build step, and a native desktop app that wraps that page. The physics
@@ -19,8 +20,9 @@ lives once, in `main.js`.
 ## Temperature
 
 - A thermometer tag follows the cursor over the canvas, naming whatever is
-  under it and its temperature. It can be turned off under Options. The
-  View button there switches the whole canvas to a heat map.
+  under it and its temperature. It can be turned off under Options, and the
+  Units button there switches it between kelvin, Celsius, and Fahrenheit.
+  The View button switches the whole canvas to a heat map.
 - The Heat and Cool tools in the palette raise or lower temperature under
   the brush without placing anything.
 - Ambient temperature is a setting: Space is 0 K, Cold is winter, Earth is

@@ -320,7 +320,9 @@ function morph(i, type, heat) {
 
 function condOf(i) {
   const t = cells[i];
-  if (t === EMPTY) return ambientK < 20 ? 0 : 0.12; // vacuum does not conduct
+  // Air conducts; vacuum only passes the trickle that stands in for
+  // close-range radiative transfer, so space next to hot things warms.
+  if (t === EMPTY) return ambientK < 20 ? 0.03 : 0.12;
   return CONDUCT[t] !== undefined ? CONDUCT[t] : 0.1;
 }
 
@@ -348,13 +350,31 @@ function flowHeat() {
       }
     }
   }
+  const vac = ambientK < 20;
   for (let i = 0; i < temp.length; i++) {
     const t = cells[i];
-    // Empty space snaps back to ambient quickly; matter radiates slowly.
-    // Plasma keeps its own heat, that is the whole point of it.
-    const r = t === EMPTY ? 0.08 : t === PLASMA ? 0 : 0.003;
+    // Air snaps back to ambient quickly. Vacuum holds warmth much longer,
+    // losing it slowly to the cosmic background, so a warm patch of space
+    // stays readable. Plasma keeps its own heat, that is the point of it.
+    // In vacuum, matter loses less to the background because shining, just
+    // below, is doing the radiating for it.
+    const r = t === EMPTY ? (vac ? 0.01 : 0.08) : t === PLASMA ? 0 : vac ? 0.0015 : 0.003;
     temp[i] += (ambientK - temp[i]) * r;
     if (temp[i] < 0) temp[i] = 0;
+
+    // In vacuum, hot matter shines. A glowing cell throws a bit of heat to
+    // a random nearby cell the way sunlight crosses empty space; radiation
+    // needs no medium. Stars do a stronger version of this themselves.
+    if (vac && t !== EMPTY && t !== PLASMA && temp[i] > 600 && Math.random() < 0.5) {
+      const x = i % W, y = (i / W) | 0;
+      const dx = (Math.random() * 21 | 0) - 10;
+      const dy = (Math.random() * 21 | 0) - 10;
+      if ((dx !== 0 || dy !== 0) && inBounds(x + dx, y + dy)) {
+        const n = i + dy * W + dx;
+        const d2 = dx * dx + dy * dy;
+        if (temp[n] < temp[i]) temp[n] += (temp[i] - temp[n]) * 0.6 / (d2 + 2);
+      }
+    }
   }
 }
 
@@ -1247,7 +1267,15 @@ const tipEl = document.getElementById('tip');
 const stageEl = document.querySelector('.stage');
 let thermoOn = true;
 try { thermoOn = localStorage.getItem('thermometer') !== 'off'; } catch (e) {}
+let tempUnit = 'K';
+try { tempUnit = localStorage.getItem('tempunit') || 'K'; } catch (e) {}
 let tipX = 0, tipY = 0, tipShown = false;
+
+function formatTemp(k) {
+  if (tempUnit === 'C') return Math.round(k - 273.15) + ' C';
+  if (tempUnit === 'F') return Math.round(k * 9 / 5 - 459.67) + ' F';
+  return Math.round(k) + ' K';
+}
 
 const NAMES = {};
 for (const m of MATERIALS) NAMES[m.id] = m.name;
@@ -1272,7 +1300,7 @@ function updateTip() {
   const stageW = stageEl.clientWidth;
   tipEl.style.left = Math.min(tipX, stageW - 150) + 'px';
   tipEl.style.top = tipY + 'px';
-  tipEl.textContent = nameOf(cells[mouseCell]) + ', ' + Math.round(temp[mouseCell]) + ' K';
+  tipEl.textContent = nameOf(cells[mouseCell]) + ', ' + formatTemp(temp[mouseCell]);
 }
 
 let ticks = 0; // rAF frames, unlike `frame` this advances while paused
@@ -1510,6 +1538,14 @@ thermoBtn.addEventListener('click', () => {
   thermoOn = !thermoOn;
   try { localStorage.setItem('thermometer', thermoOn ? 'on' : 'off'); } catch (e) {}
   thermoBtn.textContent = thermoOn ? 'Thermometer: on' : 'Thermometer: off';
+});
+
+const unitsBtn = document.getElementById('units');
+unitsBtn.textContent = 'Units: ' + tempUnit;
+unitsBtn.addEventListener('click', () => {
+  tempUnit = tempUnit === 'K' ? 'C' : tempUnit === 'C' ? 'F' : 'K';
+  try { localStorage.setItem('tempunit', tempUnit); } catch (e) {}
+  unitsBtn.textContent = 'Units: ' + tempUnit;
 });
 
 window.addEventListener('keydown', (e) => {
