@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Falling Sand</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Falling Sand</h1>
+    <p class="tagline">A little cellular-automata sandbox. Paint some materials and watch what they do to each other.</p>
+  </header>
+
+  <main>
+    <div class="stage">
+      <canvas id="sim" width="200" height="150"></canvas>
+    </div>
+
+    <aside class="panel">
+      <div class="materials" id="materials"></div>
+
+      <label class="control">
+        Brush size
+        <input type="range" id="brush" min="1" max="12" value="3">
+      </label>
+
+      <div class="buttons">
+        <button id="pause" type="button">Pause</button>
+        <button id="clear" type="button">Clear</button>
+      </div>
+
+      <p class="hint">Drag on the canvas to draw. Right-click drags to erase. Number keys pick a material, space pauses.</p>
+    </aside>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+</html>
