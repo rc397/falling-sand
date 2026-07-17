@@ -21,6 +21,26 @@
       <div class="materials" id="materials"></div>
 
       <div class="control">
+        World
+        <div class="chips" id="world"></div>
+      </div>
+
+      <div class="control">
+        Gravity
+        <div class="chips" id="gravity"></div>
+      </div>
+
+      <label class="control">
+        Gravity strength
+        <input type="range" id="gravstrength" min="0.2" max="3" step="0.1" value="1">
+      </label>
+
+      <div class="control">
+        Ambient temperature
+        <div class="chips" id="ambient"></div>
+      </div>
+
+      <div class="control">
         Flame heat
         <div class="chips" id="heat"></div>
       </div>
@@ -30,10 +50,13 @@
         <input type="range" id="brush" min="1" max="12" value="3">
       </label>
 
+      <p class="thermo" id="thermo">293 K at cursor</p>
+
       <div class="buttons">
         <button id="pause" type="button">Pause</button>
         <button id="clear" type="button">Clear</button>
         <button id="mute" type="button">Sound</button>
+        <button id="view" type="button">View: materials</button>
       </div>
 
       <p class="hint">Drag on the canvas to draw. Right-click drags to erase. Number keys pick common materials, space pauses. The brush only paints into open space, so drop fire next to fuel and let it spread on its own.</p>

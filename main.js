@@ -1,11 +1,16 @@
 // Falling sand.
 //
-// The canvas is a grid of cells and each cell holds one material. Every frame
-// we walk the grid from the bottom up and let each cell try to move using a
-// few simple rules: powders fall and pile, liquids fall and spread, gases
-// rise. On top of that sits a layer of chemistry: fire eats fuel, hot enough
-// fire turns sand to glass, metal conducts heat and melts, seeds sprout on
-// wet dirt, plants breathe in smoke, and black holes eat everything.
+// The canvas is a grid of cells and each cell holds one material plus a
+// temperature in kelvin. Every frame we walk the grid from the bottom up and
+// let each cell try to move: powders fall and pile, liquids pool, gases rise.
+// Heat conducts between neighbours and everything radiates toward the world's
+// ambient temperature, so fire is just a very hot cell, ice is water below
+// 273 K, and lava is rock that has not cooled down yet.
+//
+// Gravity is a setting. Down is the normal sandbox. Mutual computes a coarse
+// gravity field from the mass on screen and pulls everything toward
+// everything, which is enough to collapse a hydrogen cloud until compression
+// heats the core past ignition and a star lights.
 
 const canvas = document.getElementById('sim');
 const ctx = canvas.getContext('2d');
@@ -38,6 +43,21 @@ const TNT    = 20;
 const NITRO  = 21;
 const BLACKHOLE = 22;
 const ASH    = 23;
+const ICE    = 24;
+const HYDROGEN = 25;
+const HELIUM = 26;
+const CARBON = 27;
+const URANIUM = 28;
+const STARDUST = 29;
+const PLASMA = 30;
+const C4     = 31;
+const FIREWORK = 32;
+const SPARK  = 33;
+const THERMITE = 34;
+
+// Pseudo materials for the brush only; they never land in the grid.
+const TOOL_HEAT = 250;
+const TOOL_COOL = 251;
 
 // Rough density per material. Negative wants to rise. A moving cell can push
 // into a neighbour that is empty or a fluid it outweighs, which is enough to
@@ -45,19 +65,26 @@ const ASH    = 23;
 const DENSITY = {
   [EMPTY]:  0,
   [SMOKE]: -3,
+  [HELIUM]: -4,
+  [HYDROGEN]: -3,
   [STEAM]: -2,
   [FIRE]:  -1,
+  [SPARK]: -1,
   [OIL]:    3,
   [NITRO]:  4,
   [WATER]:  5,
+  [STARDUST]: 7,
+  [CARBON]: 8,
   [SHARD]:  9,
   [ASH]:    9,
+  [THERMITE]: 9,
   [SAND]:  10,
   [DIRT]:  10,
   [SEED]:  10,
   [RUST]:  10,
   [GUNPOWDER]: 11,
   [LAVA]:  15,
+  [URANIUM]: 18,
   [MOLTEN]: 20,
   [BOULDER]: 60,
   [PLANT]: 90,
@@ -66,6 +93,10 @@ const DENSITY = {
   [GLASS]: 99,
   [METAL]: 99,
   [TNT]:   99,
+  [C4]:    99,
+  [ICE]:   99,
+  [FIREWORK]: 99,
+  [PLASMA]: 99,
   [BLACKHOLE]: 99,
 };
 
@@ -94,15 +125,58 @@ const COLORS = {
   [NITRO]: [180, 226, 170],
   [BLACKHOLE]: [26, 12, 36],
   [ASH]:   [120, 116, 110],
+  [ICE]:   [170, 214, 232],
+  [HYDROGEN]: [126, 148, 196],
+  [HELIUM]: [196, 176, 140],
+  [CARBON]: [46, 46, 50],
+  [URANIUM]: [112, 176, 92],
+  [STARDUST]: [172, 152, 190],
+  [PLASMA]: [255, 240, 180],
+  [C4]:    [222, 214, 180],
+  [FIREWORK]: [196, 84, 64],
+  [SPARK]: [255, 200, 120],
+  [THERMITE]: [152, 140, 128],
 };
 
-// Chance per frame that fire spreads into a neighbouring cell of this type.
+// Spark burst colours, picked per firework and stored in aux.
+const SPARK_HUES = [
+  [255, 110, 90], [255, 210, 110], [120, 255, 140],
+  [110, 220, 255], [200, 140, 255], [255, 255, 255],
+];
+
+// How readily heat moves through each material. Vacuum conducts nothing;
+// what EMPTY does depends on the ambient setting (air on Earth, vacuum in
+// space).
+const CONDUCT = {
+  [METAL]: 0.45, [MOLTEN]: 0.35, [PLASMA]: 0.4, [LAVA]: 0.3, [FIRE]: 0.3,
+  [WATER]: 0.28, [ICE]: 0.25, [OIL]: 0.2, [NITRO]: 0.2, [STEAM]: 0.2,
+  [URANIUM]: 0.2, [SPARK]: 0.2, [SMOKE]: 0.15, [HYDROGEN]: 0.15,
+  [THERMITE]: 0.15, [SAND]: 0.12, [HELIUM]: 0.12, [DIRT]: 0.1, [RUST]: 0.1,
+  [PLANT]: 0.1, [GUNPOWDER]: 0.1, [CARBON]: 0.1, [STARDUST]: 0.1,
+  [ASH]: 0.08, [SHARD]: 0.08, [BOULDER]: 0.08, [STONE]: 0.06, [SEED]: 0.06,
+  [GLASS]: 0.05, [WOOD]: 0.04, [TNT]: 0.05, [C4]: 0.05, [FIREWORK]: 0.05,
+  [BLACKHOLE]: 0,
+};
+
+// What temperature a painted flame burns at. Low is a campfire, high is a
+// torch that fuses sand and cuts metal.
+const FIRE_TEMP = { 1: 800, 2: 1900, 3: 2600 };
+
+// Chance per frame that open flame spreads into a neighbouring cell of this
+// type. Heat can also ignite these on its own through IGNITE below.
 const FLAMMABLE = {
   [WOOD]: 0.16,
   [OIL]:  0.6,
   [PLANT]: 0.25,
   [SEED]: 0.3,
   [GUNPOWDER]: 0.95,
+  [CARBON]: 0.08,
+};
+
+// Auto-ignition temperatures in kelvin.
+const IGNITE = {
+  [WOOD]: 570, [OIL]: 500, [PLANT]: 520, [SEED]: 520,
+  [GUNPOWDER]: 460, [CARBON]: 650,
 };
 
 // Palette shown in the side panel, grouped the way the buttons are laid out.
@@ -110,7 +184,7 @@ const MATERIALS = [
   { id: SAND,   name: 'Sand',   key: '1', group: 'Powders' },
   { id: DIRT,   name: 'Dirt',   key: '2', group: 'Powders' },
   { id: ASH,    name: 'Ash',    group: 'Powders' },
-  { id: GUNPOWDER, name: 'Gunpowder', group: 'Powders' },
+  { id: CARBON, name: 'Carbon', group: 'Powders' },
   { id: WATER,  name: 'Water',  key: '3', group: 'Liquids' },
   { id: OIL,    name: 'Oil',    key: '4', group: 'Liquids' },
   { id: LAVA,   name: 'Lava',   group: 'Liquids' },
@@ -120,19 +194,31 @@ const MATERIALS = [
   { id: WOOD,   name: 'Wood',   key: '7', group: 'Solids' },
   { id: METAL,  name: 'Metal',  group: 'Solids' },
   { id: GLASS,  name: 'Glass',  group: 'Solids' },
+  { id: ICE,    name: 'Ice',    group: 'Solids' },
   { id: BOULDER, name: 'Boulder', group: 'Solids' },
   { id: SEED,   name: 'Seed',   key: '6', group: 'Life' },
   { id: PLANT,  name: 'Plant',  group: 'Life' },
   { id: SMOKE,  name: 'Smoke',  group: 'Life' },
   { id: FIRE,   name: 'Fire',   key: '5', group: 'Boom' },
+  { id: GUNPOWDER, name: 'Gunpowder', group: 'Boom' },
   { id: TNT,    name: 'TNT',    key: '9', group: 'Boom' },
-  { id: BLACKHOLE, name: 'Black hole', group: 'Exotic' },
-  { id: EMPTY,  name: 'Eraser', key: '0', group: 'Exotic' },
+  { id: C4,     name: 'C4',     group: 'Boom' },
+  { id: THERMITE, name: 'Thermite', group: 'Boom' },
+  { id: FIREWORK, name: 'Firework', group: 'Boom' },
+  { id: URANIUM, name: 'Uranium', group: 'Boom' },
+  { id: STARDUST, name: 'Stardust', group: 'Space' },
+  { id: HYDROGEN, name: 'Hydrogen', group: 'Space' },
+  { id: HELIUM, name: 'Helium', group: 'Space' },
+  { id: BLACKHOLE, name: 'Black hole', group: 'Space' },
+  { id: TOOL_HEAT, name: 'Heat', group: 'Tools' },
+  { id: TOOL_COOL, name: 'Cool', group: 'Tools' },
+  { id: EMPTY,  name: 'Eraser', key: '0', group: 'Tools' },
 ];
 
 const cells = new Uint8Array(W * H);
-const life  = new Uint8Array(W * H); // burn timer, gas lifetime, fall streak, fuse
-const aux   = new Uint8Array(W * H); // fire heat, metal temp, dirt state, lit flag
+const life  = new Uint8Array(W * H); // burn timer, gas lifetime, fuses, flight
+const aux   = new Uint8Array(W * H); // flame heat, dirt state, lit flag, hue
+const temp  = new Float32Array(W * H); // kelvin
 const moved = new Uint8Array(W * H); // stops a cell being moved twice per step
 const tint  = new Int8Array(W * H);  // fixed per-pixel shade so surfaces are not flat
 
@@ -144,12 +230,19 @@ const image = ctx.createImageData(W, H);
 
 let current = SAND;   // material the panel has selected
 let fireHeat = 1;     // 1 low, 2 medium, 3 high; set by the flame heat chips
+let ambientK = 293;   // what the world radiates toward; 0 is space
+let gravityMode = 'down'; // 'down', 'zero', or 'mutual'
+let gravityStrength = 1;
+let viewHeat = false;
 let brush = 3;
 let paused = false;
 let frame = 0;
 let shake = 0;
 let fireCount = 0;  // rough activity counts from the last step,
 let emberCount = 0; // fed to the crackle ambience
+let mouseCell = -1; // where the thermometer reads
+
+temp.fill(ambientK);
 
 // Explosions found during a step are queued and applied afterwards so a blast
 // does not interfere with the scan that discovered it.
@@ -157,14 +250,14 @@ let blasts = [];
 const holes = []; // black hole positions collected each frame
 
 function isLiquid(t) { return t === WATER || t === OIL || t === LAVA || t === MOLTEN || t === NITRO; }
-function isGas(t)    { return t === SMOKE || t === STEAM; }
+function isGas(t)    { return t === SMOKE || t === STEAM || t === HYDROGEN || t === HELIUM; }
 function isFluid(t)  { return isLiquid(t) || isGas(t); }
+function isStatic(t) { return DENSITY[t] >= 90 && t !== PLANT; }
 
-// Loose stuff a black hole can drag toward itself. Anchored solids resist
-// the pull, though nothing survives actually touching the hole.
+// Loose stuff that gravity fields and black holes can drag around. Anchored
+// solids resist the pull, though nothing survives touching a black hole.
 function isLoose(t) {
-  return t !== EMPTY && t !== STONE && t !== WOOD && t !== METAL && t !== GLASS &&
-         t !== TNT && t !== PLANT && t !== BLACKHOLE;
+  return t !== EMPTY && !isStatic(t) && t !== PLANT && t !== BLACKHOLE;
 }
 
 // Can a falling material drop into whatever sits at `target`?
@@ -181,28 +274,164 @@ function swap(a, b) {
   const c = cells[a]; cells[a] = cells[b]; cells[b] = c;
   const l = life[a];  life[a]  = life[b];  life[b]  = l;
   const x = aux[a];   aux[a]   = aux[b];   aux[b]   = x;
+  const t = temp[a];  temp[a]  = temp[b];  temp[b]  = t;
   moved[a] = 1; moved[b] = 1;
 }
 
+// Spawn a fresh cell, at whatever temperature that material arrives at.
 function set(i, type, heat) {
+  morph(i, type, heat);
+  if (type === FIRE)        temp[i] = FIRE_TEMP[aux[i]];
+  else if (type === LAVA)   temp[i] = 1400;
+  else if (type === MOLTEN) temp[i] = 1900;
+  else if (type === PLASMA) temp[i] = 8000;
+  else if (type === ICE)    temp[i] = Math.min(ambientK, 250);
+  else if (type === STEAM)  temp[i] = 380;
+  else                      temp[i] = ambientK;
+}
+
+// Change what a cell is without touching its temperature. Reactions use
+// this; steam boiled off a quench should stay hot.
+function morph(i, type, heat) {
   cells[i] = type;
   aux[i] = 0;
   if (type === FIRE) {
     aux[i] = heat || 1;
     // Hotter flames burn faster and shorter.
     life[i] = (aux[i] === 3 ? 35 : aux[i] === 2 ? 55 : 70) + (Math.random() * 30 | 0);
+    temp[i] = Math.max(temp[i], FIRE_TEMP[aux[i]]);
   } else if (type === SMOKE) {
     life[i] = 180 + (Math.random() * 75 | 0);
-  } else if (type === STEAM) {
-    life[i] = 120 + (Math.random() * 80 | 0);
-  } else if (type === MOLTEN) {
-    life[i] = 200 + (Math.random() * 55 | 0);
+  } else if (type === SPARK) {
+    life[i] = 30 + (Math.random() * 25 | 0);
+  } else if (type === PLASMA) {
+    life[i] = 220 + (Math.random() * 35 | 0);
   } else {
     life[i] = 0;
   }
 }
 
+// --- heat ------------------------------------------------------------------
+
+function condOf(i) {
+  const t = cells[i];
+  if (t === EMPTY) return ambientK < 20 ? 0 : 0.12; // vacuum does not conduct
+  return CONDUCT[t] !== undefined ? CONDUCT[t] : 0.1;
+}
+
+// One diffusion pass plus radiation toward ambient. Runs every frame.
+function flowHeat() {
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      const i = row + x;
+      const ki = condOf(i);
+      if (ki === 0) continue;
+      if (x + 1 < W) {
+        const k = Math.min(ki, condOf(i + 1));
+        if (k > 0) {
+          const d = (temp[i + 1] - temp[i]) * k * 0.5;
+          temp[i] += d; temp[i + 1] -= d;
+        }
+      }
+      if (y + 1 < H) {
+        const k = Math.min(ki, condOf(i + W));
+        if (k > 0) {
+          const d = (temp[i + W] - temp[i]) * k * 0.5;
+          temp[i] += d; temp[i + W] -= d;
+        }
+      }
+    }
+  }
+  for (let i = 0; i < temp.length; i++) {
+    const t = cells[i];
+    // Empty space snaps back to ambient quickly; matter radiates slowly.
+    // Plasma keeps its own heat, that is the whole point of it.
+    const r = t === EMPTY ? 0.08 : t === PLASMA ? 0 : 0.003;
+    temp[i] += (ambientK - temp[i]) * r;
+    if (temp[i] < 0) temp[i] = 0;
+  }
+}
+
+// Temperature-driven changes of state. Returns true if the cell changed and
+// should skip its movement update this frame.
+function applyPhase(x, y, i) {
+  const t = cells[i];
+  const k = temp[i];
+  switch (t) {
+    case WATER:
+      if (k > 373 && Math.random() < 0.3) { morph(i, STEAM); sound.sizzle(0.5); return true; }
+      if (k < 273 && Math.random() < 0.05) { morph(i, ICE); return true; }
+      return false;
+    case ICE:
+      if (k > 273 && Math.random() < 0.05) { morph(i, WATER); return true; }
+      return false;
+    case STEAM:
+      if (k < 350 && Math.random() < 0.02) { morph(i, WATER); sound.drip(); return true; }
+      return false;
+    case METAL:
+      if (k > 1800 && Math.random() < 0.2) { morph(i, MOLTEN); return true; }
+      return false;
+    case MOLTEN:
+      if (k < 1300 && Math.random() < 0.1) { morph(i, METAL); return true; }
+      return false;
+    case LAVA:
+      if (k < 900 && Math.random() < 0.08) { morph(i, STONE); return true; }
+      return false;
+    case STONE:
+      if (k > 1900 && Math.random() < 0.02) { morph(i, LAVA); return true; }
+      return false;
+    case SAND:
+      if (k > 1200 && Math.random() < 0.05) { morph(i, GLASS); return true; }
+      return false;
+    case STARDUST:
+      // Squeezed and heated long enough, dust becomes rock. This is where
+      // planet cores come from.
+      if (k > 1300 && Math.random() < 0.05) { morph(i, LAVA); return true; }
+      return false;
+    case THERMITE:
+      // Does not explode, it just starts its own private sun. The burn is
+      // handled in updateThermite; this only strikes the match.
+      if (k > 900 && aux[i] === 0) { aux[i] = 1; life[i] = 100 + (Math.random() * 50 | 0); }
+      return false;
+    case NITRO:
+      if (k > 450) { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 6 }); return true; }
+      return false;
+    case TNT:
+      if (k > 600 && aux[i] === 0) { aux[i] = 1; life[i] = 20 + (Math.random() * 20 | 0); }
+      return false;
+    case URANIUM:
+      if (k > 1500) { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 22 }); return true; }
+      return false;
+    case HYDROGEN:
+      // Hot enough and it fuses into plasma. That is how stars are born.
+      if (k > 3000) { morph(i, PLASMA); return true; }
+      // In an atmosphere it burns to water vapour with a thump; in vacuum
+      // there is no oxygen, so it just gets hotter.
+      if (k > 700 && ambientK > 100) { morph(i, STEAM); blasts.push({ x: x, y: y, r: 2 }); return true; }
+      return false;
+    default:
+      if (IGNITE[t] && k > IGNITE[t]) {
+        morph(i, FIRE, k > 2200 ? 3 : k > 1200 ? 2 : 1);
+        return true;
+      }
+      return false;
+  }
+}
+
+// --- movement ---------------------------------------------------------------
+
+// Weightless drift for when there is no down. Loose matter wanders.
+function drift(x, y, i) {
+  if (Math.random() > 0.06) return;
+  const [dx, dy] = NEIGHBORS[Math.random() * NEIGHBORS.length | 0];
+  if (!inBounds(x + dx, y + dy)) return;
+  const n = i + dy * W + dx;
+  if (cells[n] === EMPTY) swap(i, n);
+}
+
 function updatePowder(x, y, i, type) {
+  if (gravityMode !== 'down') { drift(x, y, i); return; }
   if (y + 1 >= H) { if (type === BOULDER) life[i] = 0; return; }
   const below = i + W;
   if (canSink(type, cells[below])) {
@@ -217,11 +446,11 @@ function updatePowder(x, y, i, type) {
   // sliding off to the side. Everything else behaves like a normal powder.
   if (type === BOULDER) {
     const t = cells[below];
-    if (t === PLANT || t === SEED) { set(below, EMPTY); swap(i, below); return; }
+    if (t === PLANT || t === SEED) { morph(below, EMPTY); swap(i, below); return; }
     if (life[i] >= 2) {
       sound.thud();
       if (t === GLASS) { shatter(x, y + 1); }
-      if (t === NITRO) { set(below, EMPTY); blasts.push({ x: x, y: y + 1, r: 6 }); }
+      if (t === NITRO) { morph(below, EMPTY); blasts.push({ x: x, y: y + 1, r: 6 }); }
     }
     life[i] = 0;
     return;
@@ -239,11 +468,11 @@ function updatePowder(x, y, i, type) {
 }
 
 function updateLiquid(x, y, i, type) {
+  if (gravityMode !== 'down') { drift(x, y, i); return; }
   if (y + 1 < H) {
     const below = i + W;
     if (canSink(type, cells[below])) {
-      // Only nitro cares how far it has fallen. Everything else uses life
-      // for its own bookkeeping (molten metal cools on it), so leave it be.
+      // Only nitro cares how far it has fallen.
       if (type === NITRO) life[i] = Math.min(life[i] + 1, 250);
       swap(i, below);
       return;
@@ -258,7 +487,7 @@ function updateLiquid(x, y, i, type) {
 
   if (type === NITRO) {
     if (life[i] >= 3) {
-      set(i, EMPTY);
+      morph(i, EMPTY);
       blasts.push({ x: x, y: y, r: 6 });
       return;
     }
@@ -281,23 +510,15 @@ function updateLiquid(x, y, i, type) {
 }
 
 function updateGas(x, y, i, type) {
-  // Gases live on a timer instead of vanishing at random. Smoke hangs around
-  // long enough for plants to drink it; steam cools back into water.
-  if ((frame & 7) === 0 && --life[i] === 0) {
-    cells[i] = (type === STEAM && Math.random() < 0.35) ? WATER : EMPTY;
+  // Smoke lives on a timer so plants get their chance to drink it. The other
+  // gases hang around; steam condenses through the phase rules instead.
+  if (type === SMOKE && (frame & 7) === 0 && --life[i] === 0) {
+    morph(i, EMPTY);
     moved[i] = 1;
     return;
   }
 
-  // Steam touching a cold ceiling condenses and drips.
-  if (type === STEAM && y - 1 >= 0) {
-    const up = cells[i - W];
-    if ((up === STONE || up === GLASS || up === METAL) && Math.random() < 0.02) {
-      set(i, WATER);
-      sound.drip();
-      return;
-    }
-  }
+  if (gravityMode !== 'down') { drift(x, y, i); return; }
 
   if (y - 1 >= 0) {
     const above = i - W;
@@ -324,8 +545,11 @@ const NEIGHBORS = [
 
 function inBounds(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
 
+// --- reactions ---------------------------------------------------------------
+
 function updateFire(x, y, i) {
   const heat = aux[i] || 1;
+  temp[i] = Math.max(temp[i], FIRE_TEMP[heat]);
   let nearWater = false;
 
   for (const [dx, dy] of NEIGHBORS) {
@@ -335,53 +559,64 @@ function updateFire(x, y, i) {
     if (t === WATER) {
       nearWater = true;
     } else if (FLAMMABLE[t] && Math.random() < FLAMMABLE[t]) {
-      set(n, FIRE, heat);
+      morph(n, FIRE, heat);
       // Burning powder crackles.
       if (t === GUNPOWDER && Math.random() < 0.05) {
         blasts.push({ x: x + dx, y: y + dy, r: 3 });
       }
-    } else if (t === SAND && heat === 3 && Math.random() < 0.08) {
-      set(n, GLASS); // hot enough flame fuses sand
+    } else if (t === THERMITE && aux[n] === 0 && Math.random() < 0.1) {
+      // Open flame is enough to strike thermite; from there its own heat
+      // carries the burn through the pile.
+      aux[n] = 1;
+      life[n] = 100 + (Math.random() * 50 | 0);
     }
   }
 
   // Water smothers the flame and one nearby drop flashes to steam.
   if (nearWater && Math.random() < 0.5) {
     sound.sizzle(0.6);
-    set(i, SMOKE);
+    morph(i, SMOKE);
     for (const [dx, dy] of NEIGHBORS) {
       if (!inBounds(x + dx, y + dy)) continue;
       const n = i + dy * W + dx;
-      if (cells[n] === WATER) { set(n, STEAM); break; }
+      if (cells[n] === WATER) { morph(n, STEAM); break; }
     }
     moved[i] = 1;
     return;
   }
 
   if (--life[i] === 0) {
-    set(i, Math.random() < 0.35 ? SMOKE : EMPTY);
+    // Most of a fire drifts off as smoke, but some of it is left as ash,
+    // which is what feeds the soil half of the terrarium loop.
+    const roll = Math.random();
+    morph(i, roll < 0.35 ? SMOKE : roll < 0.45 ? ASH : EMPTY);
     moved[i] = 1;
     return;
   }
 
   // Flames lick upward into open air.
-  if (y - 1 >= 0 && cells[i - W] === EMPTY && Math.random() < 0.25) {
+  if (gravityMode === 'down' && y - 1 >= 0 && cells[i - W] === EMPTY && Math.random() < 0.25) {
     swap(i, i - W);
   }
 }
 
 function updatePlant(x, y, i) {
+  // Plants only do plant things in a survivable temperature band.
+  const comfy = temp[i] > 275 && temp[i] < 325;
+
   // Breathe in nearby smoke. The carbon feeds the plant, so each breath adds
   // a little growth budget.
   for (const [dx, dy] of NEIGHBORS) {
     if (!inBounds(x + dx, y + dy)) continue;
     const n = i + dy * W + dx;
     if (cells[n] === SMOKE && Math.random() < 0.2) {
-      set(n, EMPTY);
+      morph(n, EMPTY);
       life[i] = Math.min(life[i] + 1, 40);
       break;
     }
   }
+
+  if (!comfy) return;
 
   // Spend growth budget pushing the stalk upward.
   if (life[i] > 0 && y - 1 >= 0 && cells[i - W] === EMPTY && Math.random() < 0.15) {
@@ -406,13 +641,12 @@ function updatePlant(x, y, i) {
 }
 
 function updateSeed(x, y, i) {
-  // Germinate when resting on soil that can support it. Wet dirt grows a
-  // decent stalk, fertilised dirt a tall one, dry dirt nothing.
-  if (y + 1 < H) {
+  // Germinate when resting on soil that can support it, in weather that can.
+  if (gravityMode === 'down' && y + 1 < H && temp[i] > 275 && temp[i] < 325) {
     const below = i + W;
     if (cells[below] === DIRT && aux[below] > 0 && Math.random() < 0.05) {
       const budget = aux[below] === 2 ? 14 : 8;
-      set(i, PLANT);
+      morph(i, PLANT);
       life[i] = budget;
       sound.sprout();
       return;
@@ -428,51 +662,33 @@ function updateDirt(x, y, i) {
       if (!inBounds(x + dx, y + dy)) continue;
       const n = i + dy * W + dx;
       if (cells[n] === WATER && Math.random() < 0.03) {
-        set(n, EMPTY);
+        morph(n, EMPTY);
         aux[i] = 1;
         break;
       }
     }
   }
   if (aux[i] < 2 && y - 1 >= 0 && cells[i - W] === ASH && Math.random() < 0.05) {
-    set(i - W, EMPTY);
+    morph(i - W, EMPTY);
     aux[i] = 2;
   }
   const wet = aux[i];
   updatePowder(x, y, i, DIRT);
-  // updatePowder clears life but not aux; wetness rides along in the swap,
-  // this just keeps it if the cell did not move.
   if (cells[i] === DIRT && aux[i] === 0) aux[i] = wet;
 }
 
 function updateMetal(x, y, i) {
-  let t = aux[i]; // temperature, 0 cold to 255 melting
-
-  for (const [dx, dy] of NEIGHBORS) {
-    if (!inBounds(x + dx, y + dy)) continue;
-    const n = i + dy * W + dx;
-    const nt = cells[n];
-    // Only medium flame and up can melt metal; a low flame is not a forge.
-    // Hotter burns faster, and there is a visible glow phase either way.
-    if (nt === FIRE) {
-      const h = aux[n] || 1;
-      if (h >= 2 && Math.random() < h / 6) t = Math.min(255, t + h);
+  // Standing water slowly eats cold metal. Everything thermal happens in the
+  // heat pass now; this is just chemistry.
+  if (temp[i] < 320 && Math.random() < 0.002) {
+    for (const [dx, dy] of NEIGHBORS) {
+      if (!inBounds(x + dx, y + dy)) continue;
+      if (cells[i + dy * W + dx] === WATER && Math.random() < 0.35) {
+        morph(i, RUST);
+        return;
+      }
     }
-    if (nt === LAVA)   t = Math.min(255, t + 6);
-    if (nt === MOLTEN) t = Math.min(255, t + 8);
-    if (nt === WATER) {
-      if (t > 150 && Math.random() < 0.3) { set(n, STEAM); sound.sizzle(0.4); }
-      t = Math.max(0, t - 25);
-      // Standing water slowly eats cold metal.
-      if (t < 40 && Math.random() < 0.0008) { set(i, RUST); return; }
-    }
-    // Conduction: neighbouring metal drifts toward this cell's temperature.
-    if (nt === METAL && aux[n] < t) aux[n] = Math.min(255, aux[n] + Math.ceil((t - aux[n]) / 8));
   }
-
-  if (t > 2 && Math.random() < 0.1) t--; // radiate a little
-  aux[i] = t;
-  if (t >= 250) set(i, MOLTEN);
 }
 
 function updateMolten(x, y, i) {
@@ -480,21 +696,13 @@ function updateMolten(x, y, i) {
     if (!inBounds(x + dx, y + dy)) continue;
     const n = i + dy * W + dx;
     const t = cells[n];
-    if (FLAMMABLE[t] && Math.random() < 0.4) set(n, FIRE, 2);
-    else if (t === SAND && Math.random() < 0.3) set(n, GLASS);
-    else if (t === WATER) {
-      // Quenched: this cell freezes back to metal, the water flashes off.
+    if (FLAMMABLE[t] && Math.random() < 0.4) morph(n, FIRE, 2);
+    else if (t === WATER && temp[i] > 1500) {
+      // Quenched: the water flashes off and the heat pass does the rest.
       sound.sizzle(1);
-      set(n, STEAM);
-      set(i, METAL);
-      aux[i] = 180;
-      return;
+      morph(n, STEAM);
+      temp[i] -= 400;
     }
-  }
-  if ((frame & 3) === 0 && --life[i] === 0) {
-    set(i, METAL);
-    aux[i] = 200; // freshly solidified, still glowing
-    return;
   }
   updateLiquid(x, y, i, MOLTEN);
 }
@@ -504,12 +712,11 @@ function updateLava(x, y, i) {
     if (!inBounds(x + dx, y + dy)) continue;
     const n = i + dy * W + dx;
     const t = cells[n];
-    if (FLAMMABLE[t] && Math.random() < 0.4) set(n, FIRE, 2);
-    else if (t === SAND && Math.random() < 0.08) set(n, GLASS);
+    if (FLAMMABLE[t] && Math.random() < 0.4) morph(n, FIRE, 2);
     else if (t === WATER) {
       sound.sizzle(1);
-      set(n, STEAM);
-      set(i, STONE); // skins over where it meets water
+      morph(n, STEAM);
+      morph(i, STONE); // skins over where it meets water
       return;
     }
   }
@@ -521,7 +728,7 @@ function updateTnt(x, y, i) {
     // Fuse is lit.
     sound.fuse();
     if (--life[i] === 0) {
-      set(i, FIRE, 2);
+      morph(i, FIRE, 2);
       blasts.push({ x: x, y: y, r: 12 });
     }
     return;
@@ -542,7 +749,7 @@ function updateNitro(x, y, i) {
     if (!inBounds(x + dx, y + dy)) continue;
     const t = cells[i + dy * W + dx];
     if (t === FIRE || t === LAVA || t === MOLTEN) {
-      set(i, EMPTY);
+      morph(i, EMPTY);
       blasts.push({ x: x, y: y, r: 6 });
       return;
     }
@@ -550,9 +757,119 @@ function updateNitro(x, y, i) {
   updateLiquid(x, y, i, NITRO);
 }
 
-function updateGunpowder(x, y, i) {
-  // Fire spread handles ignition; a burning grain sometimes pops.
-  updatePowder(x, y, i, GUNPOWDER);
+function updateUranium(x, y, i) {
+  // Radioactive decay keeps it warm to the touch. Push it past critical with
+  // a blast or enough heat and applyPhase turns it into a very bad day.
+  temp[i] += 0.4;
+  updatePowder(x, y, i, URANIUM);
+}
+
+function updateThermite(x, y, i) {
+  if (aux[i] === 1) {
+    // Burning. No blast, just an absurd amount of local heat.
+    temp[i] = 2600;
+    if ((frame & 3) === 0 && --life[i] === 0) {
+      morph(i, Math.random() < 0.5 ? MOLTEN : SMOKE);
+      if (cells[i] === MOLTEN) temp[i] = 1900;
+      return;
+    }
+    return;
+  }
+  updatePowder(x, y, i, THERMITE);
+}
+
+function updateFirework(x, y, i) {
+  if (aux[i] === 0) {
+    // Waiting for a light.
+    for (const [dx, dy] of NEIGHBORS) {
+      if (!inBounds(x + dx, y + dy)) continue;
+      const t = cells[i + dy * W + dx];
+      if (t === FIRE || t === LAVA || temp[i] > 400) {
+        aux[i] = 1;
+        life[i] = 26 + (Math.random() * 14 | 0);
+        sound.whoosh();
+        break;
+      }
+    }
+    return;
+  }
+
+  // In flight. Climb until the timer runs out or something is in the way.
+  const done = --life[i] === 0;
+  const blockedUp = y - 2 < 0 || cells[i - W] !== EMPTY;
+  if (done || blockedUp) {
+    const hue = Math.random() * SPARK_HUES.length | 0;
+    for (const [dx, dy] of NEIGHBORS) {
+      for (let s = 1; s <= 4; s++) {
+        if (!inBounds(x + dx * s, y + dy * s)) break;
+        const n = i + dy * s * W + dx * s;
+        if (cells[n] === EMPTY && Math.random() < 0.75) {
+          morph(n, SPARK);
+          aux[n] = hue;
+        }
+      }
+    }
+    morph(i, SPARK);
+    aux[i] = hue;
+    shake = Math.min(shake + 4, 24);
+    sound.burst();
+    return;
+  }
+  swap(i, i - W);
+}
+
+function updateSpark(x, y, i) {
+  if ((frame & 1) === 0 && --life[i] === 0) {
+    morph(i, EMPTY);
+    moved[i] = 1;
+    return;
+  }
+  // Sparks float down lazily, drifting as they go.
+  if (gravityMode === 'down' && y + 1 < H && cells[i + W] === EMPTY && Math.random() < 0.3) {
+    swap(i, i + W);
+    return;
+  }
+  drift(x, y, i);
+}
+
+function updatePlasma(x, y, i) {
+  temp[i] = Math.max(temp[i], 6000);
+  let fed = false;
+
+  for (const [dx, dy] of NEIGHBORS) {
+    if (!inBounds(x + dx, y + dy)) continue;
+    const n = i + dy * W + dx;
+    if (cells[n] === HYDROGEN) {
+      fed = true;
+      // Fusion: hydrogen in, helium and heat out. Only some of the fuel
+      // joins the star itself, so a cloud leaves a helium shell behind.
+      if (Math.random() < 0.1) {
+        morph(n, Math.random() < 0.35 ? PLASMA : HELIUM);
+        temp[i] = Math.min(temp[i] + 500, 10000);
+      }
+    }
+  }
+
+  // Starlight: radiate to a couple of random nearby cells even through
+  // vacuum, so a star warms its system the way conduction cannot.
+  for (let k = 0; k < 2; k++) {
+    const dx = (Math.random() * 17 | 0) - 8;
+    const dy = (Math.random() * 17 | 0) - 8;
+    if (!inBounds(x + dx, y + dy) || (dx === 0 && dy === 0)) continue;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > 64) continue;
+    const n = i + dy * W + dx;
+    if (cells[n] !== PLASMA) temp[n] = Math.min(temp[n] + 60 / d2 * (temp[i] / 6000), 5000);
+  }
+
+  // A star with no fuel left slowly gutters out into helium.
+  if (!fed && (frame & 3) === 0 && --life[i] === 0) {
+    morph(i, Math.random() < 0.5 ? HELIUM : EMPTY);
+    return;
+  }
+  if (fed) life[i] = Math.min(life[i] + 2, 250);
+
+  if (gravityMode !== 'down') drift(x, y, i);
 }
 
 // Turn a glass cell and its glassy neighbourhood into shards.
@@ -562,7 +879,7 @@ function shatter(cx, cy) {
     for (let dx = -2; dx <= 2; dx++) {
       if (!inBounds(cx + dx, cy + dy)) continue;
       const n = (cy + dy) * W + cx + dx;
-      if (cells[n] === GLASS && Math.random() < 0.8) set(n, SHARD);
+      if (cells[n] === GLASS && Math.random() < 0.8) morph(n, SHARD);
     }
   }
 }
@@ -582,28 +899,28 @@ function applyBlast(bx, by, r) {
       if (t === BLACKHOLE) continue;
 
       // Glass shatters out to well past the fireball.
-      if (t === GLASS && d2 <= r2 * 2) { set(i, SHARD); continue; }
+      if (t === GLASS && d2 <= r2 * 2) { morph(i, SHARD); continue; }
       if (d2 > r2) continue;
 
+      const p = 1 - Math.sqrt(d2) / r;
+      temp[i] = Math.min(temp[i] + 900 * p + 200, 6000);
+
       // Chain other explosives with a delay that grows with distance,
-      // so a TNT stack ripples instead of going up as one bang.
+      // so a stack ripples instead of going up as one bang.
       if (t === TNT) {
         aux[i] = 1;
         life[i] = 4 + (Math.sqrt(d2) * 2 | 0) + (Math.random() * 6 | 0);
         continue;
       }
-      if (t === NITRO) {
-        set(i, EMPTY);
-        blasts.push({ x: x, y: y, r: 6 });
-        continue;
-      }
+      if (t === NITRO) { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 6 }); continue; }
+      if (t === C4)    { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 16 }); continue; }
+      if (t === URANIUM) { morph(i, EMPTY); blasts.push({ x: x, y: y, r: 22 }); continue; }
 
-      const p = 1 - Math.sqrt(d2) / r;
       // Stone and metal only give way near the core.
-      if ((t === STONE || t === METAL) && d2 > r2 * 0.12) continue;
+      if ((t === STONE || t === METAL || t === ICE) && d2 > r2 * 0.12) continue;
       if (Math.random() < p * 0.9 + 0.1) {
         const roll = Math.random();
-        set(i, roll < 0.45 ? FIRE : roll < 0.7 ? SMOKE : EMPTY, 2);
+        morph(i, roll < 0.45 ? FIRE : roll < 0.7 ? SMOKE : EMPTY, 2);
       }
     }
   }
@@ -613,12 +930,12 @@ function applyBlast(bx, by, r) {
 function feedBlackHoles() {
   const R = 14;
   for (const bh of holes) {
-    const { x: hx, y: hy } = bh;
+    const hx = bh.x, hy = bh.y;
     const hi = hy * W + hx;
     for (const [dx, dy] of NEIGHBORS) {
       if (!inBounds(hx + dx, hy + dy)) continue;
       const n = hi + dy * W + dx;
-      if (cells[n] !== EMPTY && cells[n] !== BLACKHOLE) set(n, EMPTY);
+      if (cells[n] !== EMPTY && cells[n] !== BLACKHOLE) morph(n, EMPTY);
     }
     for (let dy = -R; dy <= R; dy++) {
       for (let dx = -R; dx <= R; dx++) {
@@ -630,26 +947,105 @@ function feedBlackHoles() {
         if (!isLoose(cells[i])) continue;
         // Inside the accretion zone nothing escapes, loose or not falling.
         if (d2 <= 6) {
-          if (Math.random() < 0.5) set(i, EMPTY);
+          if (Math.random() < 0.5) morph(i, EMPTY);
           continue;
         }
         if (Math.random() > 4 / Math.sqrt(d2 + 1)) continue;
-        // Step toward the hole, twice when close, so infall beats gravity
-        // instead of hovering in a stalemate with it.
-        let ci = i, cx = x, cy = y;
-        const steps = d2 < 64 ? 2 : 1;
-        for (let s = 0; s < steps; s++) {
-          const sx = cx === hx ? 0 : cx > hx ? -1 : 1;
-          const sy = cy === hy ? 0 : cy > hy ? -1 : 1;
-          if (cells[ci + sy * W + sx] === EMPTY) { swap(ci, ci + sy * W + sx); ci += sy * W + sx; cx += sx; cy += sy; }
-          else if (sx !== 0 && cells[ci + sx] === EMPTY) { swap(ci, ci + sx); ci += sx; cx += sx; }
-          else if (sy !== 0 && cells[ci + sy * W] === EMPTY) { swap(ci, ci + sy * W); ci += sy * W; cy += sy; }
-          else break;
-        }
+        pullToward(i, x, y, hx, hy, d2 < 64 ? 2 : 1);
       }
     }
   }
 }
+
+// Step a cell up to `steps` cells toward a target point, sliding around
+// obstacles when the diagonal is blocked.
+function pullToward(i, x, y, tx, ty, steps) {
+  let ci = i, cx = x, cy = y;
+  for (let s = 0; s < steps; s++) {
+    const sx = cx === tx ? 0 : cx > tx ? -1 : 1;
+    const sy = cy === ty ? 0 : cy > ty ? -1 : 1;
+    if (cells[ci + sy * W + sx] === EMPTY) { swap(ci, ci + sy * W + sx); ci += sy * W + sx; cx += sx; cy += sy; }
+    else if (sx !== 0 && cells[ci + sx] === EMPTY) { swap(ci, ci + sx); ci += sx; cx += sx; }
+    else if (sy !== 0 && cells[ci + sy * W] === EMPTY) { swap(ci, ci + sy * W); ci += sy * W; cy += sy; }
+    else return false; // crowded: caller may turn this into compression heat
+  }
+  return true;
+}
+
+// --- mutual gravity -----------------------------------------------------------
+
+// The gravity field is computed on a coarse grid: mass per block, then every
+// block attracts every other block. Cheap enough to redo every few frames.
+const CB = 8;
+const CW = Math.ceil(W / CB);
+const CH = Math.ceil(H / CB);
+const massGrid = new Float32Array(CW * CH);
+const fieldX = new Float32Array(CW * CH);
+const fieldY = new Float32Array(CW * CH);
+
+function massOf(t) {
+  if (t === EMPTY) return 0;
+  if (isGas(t)) return 0.3;
+  return Math.abs(DENSITY[t]) || 1;
+}
+
+function rebuildField() {
+  massGrid.fill(0);
+  for (let y = 0; y < H; y++) {
+    const by = (y / CB) | 0;
+    for (let x = 0; x < W; x++) {
+      const t = cells[y * W + x];
+      if (t !== EMPTY) massGrid[by * CW + ((x / CB) | 0)] += massOf(t);
+    }
+  }
+  for (let a = 0; a < CW * CH; a++) {
+    const ax = a % CW, ay = (a / CW) | 0;
+    let gx = 0, gy = 0;
+    for (let b = 0; b < CW * CH; b++) {
+      const m = massGrid[b];
+      if (m === 0) continue;
+      const dx = (b % CW) - ax;
+      const dy = ((b / CW) | 0) - ay;
+      const d2 = dx * dx + dy * dy;
+      // Skip the near field. A clump's own mass would otherwise drown out
+      // every distant pull and pin it in place; ignoring the closest blocks
+      // makes the field mean "everything else", so objects can actually
+      // travel while wide clouds still collapse on themselves.
+      if (d2 <= 6) continue;
+      const f = m / (d2 * Math.sqrt(d2));
+      gx += f * dx;
+      gy += f * dy;
+    }
+    fieldX[a] = gx;
+    fieldY[a] = gy;
+  }
+}
+
+function applyMutualGravity() {
+  if ((frame & 3) === 0) rebuildField();
+  const G = gravityStrength * 0.08;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (!isLoose(cells[i]) || moved[i]) continue;
+      const b = ((y / CB) | 0) * CW + ((x / CB) | 0);
+      const gx = fieldX[b], gy = fieldY[b];
+      const mag = Math.sqrt(gx * gx + gy * gy);
+      if (mag === 0) continue;
+      if (Math.random() > Math.min(0.9, mag * G)) continue;
+      const tx = x + (gx / mag > 0.4 ? 1 : gx / mag < -0.4 ? -1 : 0);
+      const ty = y + (gy / mag > 0.4 ? 1 : gy / mag < -0.4 ? -1 : 0);
+      if (!pullToward(i, x, y, tx + (tx - x) * 8, ty + (ty - y) * 8, 1)) {
+        // Nowhere to go: the squeeze turns into heat. This is what ignites
+        // the core of a collapsing cloud. Liquids are incompressible, so a
+        // settled molten planet stops heating and can crust over.
+        if (!isLiquid(cells[i])) temp[i] += 4 * gravityStrength;
+      }
+    }
+  }
+}
+
+// --- main loop -----------------------------------------------------------------
 
 function step() {
   moved.fill(0);
@@ -663,14 +1059,19 @@ function step() {
       const x = leftFirst ? k : W - 1 - k;
       const i = y * W + x;
       if (moved[i]) continue;
+      if (cells[i] !== EMPTY && applyPhase(x, y, i)) continue;
 
       switch (cells[i]) {
         case SAND:
         case ASH:
         case RUST:
         case SHARD:
+        case CARBON:
+        case STARDUST:
+        case GUNPOWDER:
         case BOULDER: updatePowder(x, y, i, cells[i]); break;
-        case GUNPOWDER: updateGunpowder(x, y, i); break;
+        case URANIUM: updateUranium(x, y, i); break;
+        case THERMITE: updateThermite(x, y, i); break;
         case DIRT:  updateDirt(x, y, i); break;
         case SEED:  updateSeed(x, y, i); break;
         case WATER: updateLiquid(x, y, i, WATER); break;
@@ -680,10 +1081,15 @@ function step() {
         case MOLTEN: emberCount++; updateMolten(x, y, i); break;
         case SMOKE: updateGas(x, y, i, SMOKE); break;
         case STEAM: updateGas(x, y, i, STEAM); break;
+        case HYDROGEN: updateGas(x, y, i, HYDROGEN); break;
+        case HELIUM: updateGas(x, y, i, HELIUM); break;
         case FIRE:  fireCount++; updateFire(x, y, i); break;
         case PLANT: updatePlant(x, y, i); break;
         case METAL: updateMetal(x, y, i); break;
         case TNT:   updateTnt(x, y, i); break;
+        case FIREWORK: updateFirework(x, y, i); break;
+        case SPARK: fireCount++; updateSpark(x, y, i); break;
+        case PLASMA: emberCount += 4; updatePlasma(x, y, i); break;
         case BLACKHOLE: holes.push({ x: x, y: y }); break;
       }
     }
@@ -696,10 +1102,23 @@ function step() {
   blasts = [];
   for (const b of queued) applyBlast(b.x, b.y, b.r);
   feedBlackHoles();
+  if (gravityMode === 'mutual') applyMutualGravity();
+  flowHeat();
   frame++;
 }
 
 function clamp(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+// Map a temperature to the heat view gradient: black through blue, red,
+// orange, to white.
+function heatColor(k) {
+  const t = Math.min(k, 3000) / 3000;
+  if (t < 0.1)  { const u = t / 0.1;  return [u * 16, u * 24, 16 + u * 80]; }
+  if (t < 0.35) { const u = (t - 0.1) / 0.25;  return [16 + u * 112, 24 - u * 8, 96 - u * 64]; }
+  if (t < 0.6)  { const u = (t - 0.35) / 0.25; return [128 + u * 127, 16 + u * 80, 32]; }
+  if (t < 0.85) { const u = (t - 0.6) / 0.25;  return [255, 96 + u * 96, 32 + u * 32]; }
+  const u = (t - 0.85) / 0.15; return [255, 192 + u * 63, 64 + u * 191];
+}
 
 function render() {
   const data = image.data;
@@ -707,11 +1126,14 @@ function render() {
     const type = cells[i];
     let r, g, b;
 
-    if (type === FIRE) {
+    if (viewHeat) {
+      const c = heatColor(temp[i]);
+      r = c[0]; g = c[1]; b = c[2];
+      if (type !== EMPTY) { r = clamp(r + 24); g = clamp(g + 24); b = clamp(b + 24); }
+    } else if (type === FIRE) {
       const heat = aux[i] || 1;
       const glow = Math.min(life[i], 60) / 60;
       if (heat === 3) {
-        // Blue-white, the hottest.
         r = 120 + (Math.random() * 60 | 0);
         g = 170 + (60 * glow | 0);
         b = 255;
@@ -726,7 +1148,7 @@ function render() {
       }
     } else if (type === METAL) {
       // Glow with temperature.
-      const t = aux[i];
+      const t = Math.max(0, Math.min(255, (temp[i] - 500) / 5));
       r = clamp(140 + t * 0.45 + tint[i]);
       g = clamp(144 + t * 0.12 + tint[i]);
       b = clamp(152 - t * 0.3 + tint[i]);
@@ -734,6 +1156,16 @@ function render() {
       const c = COLORS[type];
       const f = (Math.random() * 40 | 0) - 10;
       r = clamp(c[0] + f); g = clamp(c[1] + f * 0.6); b = clamp(c[2]);
+    } else if (type === PLASMA) {
+      const f = Math.random() * 50 | 0;
+      r = 255; g = clamp(220 + f); b = clamp(140 + f + tint[i]);
+    } else if (type === SPARK) {
+      const c = SPARK_HUES[aux[i] % SPARK_HUES.length];
+      const fade = Math.min(life[i], 40) / 40;
+      r = clamp(c[0] * fade); g = clamp(c[1] * fade); b = clamp(c[2] * fade);
+    } else if (type === THERMITE && aux[i] === 1) {
+      const f = Math.random() * 80 | 0;
+      r = 255; g = clamp(200 + f); b = clamp(160 + f);
     } else if (type === TNT && aux[i] === 1 && (frame & 4)) {
       r = 255; g = 240; b = 200; // lit fuse flashing
     } else if (type === DIRT) {
@@ -766,16 +1198,38 @@ function render() {
   }
 }
 
+const thermoEl = document.getElementById('thermo');
+let ticks = 0; // rAF frames, unlike `frame` this advances while paused
+
 function loop() {
   if (!paused) {
     step();
     sound.ambience(fireCount, emberCount, holes.length);
   }
   render();
+  if ((++ticks % 6) === 0 && mouseCell >= 0) {
+    thermoEl.textContent = Math.round(temp[mouseCell]) + ' K at cursor';
+  }
   requestAnimationFrame(loop);
 }
 
 function paintCircle(cx, cy, type) {
+  // The heat and cool tools adjust temperature and place nothing.
+  if (type === TOOL_HEAT || type === TOOL_COOL) {
+    const d = type === TOOL_HEAT ? 60 : -60;
+    const r = brush;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const x = cx + dx, y = cy + dy;
+        if (!inBounds(x, y)) continue;
+        const i = y * W + x;
+        temp[i] = Math.max(0, Math.min(6000, temp[i] + d));
+      }
+    }
+    return 1;
+  }
+
   // A black hole is a single point, however big the brush is. One is plenty.
   if (type === BLACKHOLE) {
     if (inBounds(cx, cy) && cells[cy * W + cx] === EMPTY) {
@@ -806,6 +1260,7 @@ function paintCircle(cx, cy, type) {
 // What a material sounds like coming off the brush.
 function brushSound(type) {
   if (type === EMPTY) return 'erase';
+  if (type === TOOL_HEAT || type === TOOL_COOL) return 'gas';
   if (isLiquid(type)) return 'liquid';
   if (isGas(type)) return 'gas';
   if (DENSITY[type] >= 90) return 'solid';
@@ -835,8 +1290,9 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (!drawing) return;
   const [x, y] = cellFromEvent(e);
+  if (inBounds(x, y)) mouseCell = y * W + x;
+  if (!drawing) return;
   if (paintCircle(x, y, brushType) > 0) sound.paint(brushSound(brushType));
 });
 
@@ -855,6 +1311,8 @@ function selectMaterial(id) {
   }
 }
 
+const TOOL_COLORS = { [TOOL_HEAT]: [255, 120, 60], [TOOL_COOL]: [110, 190, 255] };
+
 let lastGroup = null;
 for (const m of MATERIALS) {
   if (m.group !== lastGroup) {
@@ -869,7 +1327,7 @@ for (const m of MATERIALS) {
 
   const sw = document.createElement('span');
   sw.className = 'swatch';
-  const c = COLORS[m.id];
+  const c = COLORS[m.id] || TOOL_COLORS[m.id];
   sw.style.background = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 
   const label = document.createElement('span');
@@ -882,19 +1340,55 @@ for (const m of MATERIALS) {
 }
 selectMaterial(SAND);
 
-const heatEl = document.getElementById('heat');
-const heatChips = [];
-[['Low', 1], ['Medium', 2], ['High', 3]].forEach(([name, value]) => {
-  const chip = document.createElement('button');
-  chip.textContent = name;
-  chip.addEventListener('click', () => {
-    fireHeat = value;
-    for (const c of heatChips) c.classList.toggle('active', c === chip);
-  });
-  if (value === fireHeat) chip.classList.add('active');
-  heatEl.appendChild(chip);
-  heatChips.push(chip);
+// Small helper for the rows of setting chips.
+function buildChips(id, options, initial, onPick) {
+  const el = document.getElementById(id);
+  const chips = [];
+  for (const opt of options) {
+    const chip = document.createElement('button');
+    chip.textContent = opt.name;
+    chip.addEventListener('click', () => {
+      for (const c of chips) c.classList.toggle('active', c === chip);
+      onPick(opt.value);
+    });
+    if (opt.value === initial) chip.classList.add('active');
+    el.appendChild(chip);
+    chips.push(chip);
+  }
+  return {
+    pick: (value) => {
+      for (let k = 0; k < options.length; k++) {
+        chips[k].classList.toggle('active', options[k].value === value);
+      }
+      onPick(value);
+    },
+  };
+}
+
+const heatChips = buildChips('heat', [
+  { name: 'Low', value: 1 }, { name: 'Medium', value: 2 }, { name: 'High', value: 3 },
+], fireHeat, (v) => { fireHeat = v; });
+
+const gravityChips = buildChips('gravity', [
+  { name: 'Down', value: 'down' }, { name: 'Zero', value: 'zero' }, { name: 'Mutual', value: 'mutual' },
+], gravityMode, (v) => { gravityMode = v; });
+
+const ambientChips = buildChips('ambient', [
+  { name: 'Space', value: 0 }, { name: 'Cold', value: 250 },
+  { name: 'Earth', value: 293 }, { name: 'Hot', value: 330 },
+], ambientK, (v) => { ambientK = v; });
+
+// World presets bundle the two settings people actually mean.
+buildChips('world', [
+  { name: 'Earth', value: 'earth' }, { name: 'Space', value: 'space' },
+], 'earth', (v) => {
+  if (v === 'earth') { gravityChips.pick('down'); ambientChips.pick(293); }
+  else { gravityChips.pick('mutual'); ambientChips.pick(0); }
 });
+
+const gravInput = document.getElementById('gravstrength');
+gravityStrength = Number(gravInput.value);
+gravInput.addEventListener('input', () => { gravityStrength = Number(gravInput.value); });
 
 const brushInput = document.getElementById('brush');
 brush = Number(brushInput.value);
@@ -910,12 +1404,21 @@ document.getElementById('clear').addEventListener('click', () => {
   cells.fill(EMPTY);
   life.fill(0);
   aux.fill(0);
+  temp.fill(ambientK);
+  blasts = []; // a chain caught mid-cascade should not go off over a blank grid
+  shake = 0;
 });
 
 const muteBtn = document.getElementById('mute');
 muteBtn.textContent = sound.on() ? 'Sound: on' : 'Sound: off';
 muteBtn.addEventListener('click', () => {
   muteBtn.textContent = sound.toggle() ? 'Sound: on' : 'Sound: off';
+});
+
+const viewBtn = document.getElementById('view');
+viewBtn.addEventListener('click', () => {
+  viewHeat = !viewHeat;
+  viewBtn.textContent = viewHeat ? 'View: heat' : 'View: materials';
 });
 
 window.addEventListener('keydown', (e) => {

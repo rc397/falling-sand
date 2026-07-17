@@ -109,6 +109,11 @@ const sound = (function () {
       tone(0.9 * size, 0.5 + 0.3 * size, 'sine', 100 + Math.random() * 40, 32);
       hiss(0.7 * size, 0.35 + 0.25 * size, 'lowpass', 2600, 180);
       if (size > 0.6) hiss(0.2, 1.2, 'lowpass', 300, 60);
+      // The really big ones get a second, deeper shove and a long tail.
+      if (r > 14) {
+        tone(0.8, 1.6, 'sine', 55, 24, 0.05);
+        hiss(0.25, 2.4, 'lowpass', 200, 40, 0.1);
+      }
     },
 
     // Small crack, used for gunpowder pops.
@@ -157,6 +162,21 @@ const sound = (function () {
     fuse: function () {
       if (!ready() || !gate('fuse', 130)) return;
       hiss(0.05, 0.12, 'bandpass', 5200);
+    },
+
+    // Firework leaving the pad.
+    whoosh: function () {
+      if (!ready() || !gate('whoosh', 200)) return;
+      hiss(0.12, 0.5, 'bandpass', 400, 1400);
+    },
+
+    // Firework opening up: a crack, then sparkle.
+    burst: function () {
+      if (!ready() || !gate('burst', 150)) return;
+      hiss(0.3, 0.15, 'lowpass', 2400, 400);
+      for (let k = 0; k < 5; k++) {
+        hiss(0.06, 0.05, 'bandpass', 1500 + Math.random() * 3000, null, 0.08 + k * 0.06);
+      }
     },
 
     // Brush feedback while actually placing cells.
