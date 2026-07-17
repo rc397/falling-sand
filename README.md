@@ -107,6 +107,15 @@ semicolon, so use `--add-data "index.html:."` and so on. The binary lands in
   physics, so lay a trail and light one end instead of stamping flame over
   things.
 
+## Sound
+
+All audio is synthesized live with the Web Audio API in `audio.js`; there are
+no sample files. Explosions get a sub thump with a noise tail, glass breaks
+into little tinks, lit fuses hiss, fire crackles harder the more of it there
+is, and a black hole hums while it feeds. Browsers will not start audio until
+you interact, so it kicks in on your first click. The Sound button in the
+panel turns it off and remembers the choice.
+
 ## How it works
 
 The grid is a flat `Uint8Array` of material ids, with two side arrays for

@@ -148,6 +148,8 @@ let brush = 3;
 let paused = false;
 let frame = 0;
 let shake = 0;
+let fireCount = 0;  // rough activity counts from the last step,
+let emberCount = 0; // fed to the crackle ambience
 
 // Explosions found during a step are queued and applied afterwards so a blast
 // does not interfere with the scan that discovered it.
@@ -217,6 +219,7 @@ function updatePowder(x, y, i, type) {
     const t = cells[below];
     if (t === PLANT || t === SEED) { set(below, EMPTY); swap(i, below); return; }
     if (life[i] >= 2) {
+      sound.thud();
       if (t === GLASS) { shatter(x, y + 1); }
       if (t === NITRO) { set(below, EMPTY); blasts.push({ x: x, y: y + 1, r: 6 }); }
     }
@@ -291,6 +294,7 @@ function updateGas(x, y, i, type) {
     const up = cells[i - W];
     if ((up === STONE || up === GLASS || up === METAL) && Math.random() < 0.02) {
       set(i, WATER);
+      sound.drip();
       return;
     }
   }
@@ -343,6 +347,7 @@ function updateFire(x, y, i) {
 
   // Water smothers the flame and one nearby drop flashes to steam.
   if (nearWater && Math.random() < 0.5) {
+    sound.sizzle(0.6);
     set(i, SMOKE);
     for (const [dx, dy] of NEIGHBORS) {
       if (!inBounds(x + dx, y + dy)) continue;
@@ -409,6 +414,7 @@ function updateSeed(x, y, i) {
       const budget = aux[below] === 2 ? 14 : 8;
       set(i, PLANT);
       life[i] = budget;
+      sound.sprout();
       return;
     }
   }
@@ -455,7 +461,7 @@ function updateMetal(x, y, i) {
     if (nt === LAVA)   t = Math.min(255, t + 6);
     if (nt === MOLTEN) t = Math.min(255, t + 8);
     if (nt === WATER) {
-      if (t > 150 && Math.random() < 0.3) set(n, STEAM); // quench hiss
+      if (t > 150 && Math.random() < 0.3) { set(n, STEAM); sound.sizzle(0.4); }
       t = Math.max(0, t - 25);
       // Standing water slowly eats cold metal.
       if (t < 40 && Math.random() < 0.0008) { set(i, RUST); return; }
@@ -478,6 +484,7 @@ function updateMolten(x, y, i) {
     else if (t === SAND && Math.random() < 0.3) set(n, GLASS);
     else if (t === WATER) {
       // Quenched: this cell freezes back to metal, the water flashes off.
+      sound.sizzle(1);
       set(n, STEAM);
       set(i, METAL);
       aux[i] = 180;
@@ -500,6 +507,7 @@ function updateLava(x, y, i) {
     if (FLAMMABLE[t] && Math.random() < 0.4) set(n, FIRE, 2);
     else if (t === SAND && Math.random() < 0.08) set(n, GLASS);
     else if (t === WATER) {
+      sound.sizzle(1);
       set(n, STEAM);
       set(i, STONE); // skins over where it meets water
       return;
@@ -511,6 +519,7 @@ function updateLava(x, y, i) {
 function updateTnt(x, y, i) {
   if (aux[i] === 1) {
     // Fuse is lit.
+    sound.fuse();
     if (--life[i] === 0) {
       set(i, FIRE, 2);
       blasts.push({ x: x, y: y, r: 12 });
@@ -548,6 +557,7 @@ function updateGunpowder(x, y, i) {
 
 // Turn a glass cell and its glassy neighbourhood into shards.
 function shatter(cx, cy) {
+  sound.shatter();
   for (let dy = -2; dy <= 2; dy++) {
     for (let dx = -2; dx <= 2; dx++) {
       if (!inBounds(cx + dx, cy + dy)) continue;
@@ -558,6 +568,7 @@ function shatter(cx, cy) {
 }
 
 function applyBlast(bx, by, r) {
+  if (r <= 3) sound.pop(); else sound.boom(r);
   shake = Math.min(shake + r, 24);
   const r2 = r * r;
   const outer = Math.ceil(r * 1.4);
@@ -643,6 +654,8 @@ function feedBlackHoles() {
 function step() {
   moved.fill(0);
   holes.length = 0;
+  fireCount = 0;
+  emberCount = 0;
   for (let y = H - 1; y >= 0; y--) {
     // Alternate scan direction each frame so piles stay roughly symmetric.
     const leftFirst = (frame & 1) === 0;
@@ -663,11 +676,11 @@ function step() {
         case WATER: updateLiquid(x, y, i, WATER); break;
         case OIL:   updateLiquid(x, y, i, OIL); break;
         case NITRO: updateNitro(x, y, i); break;
-        case LAVA:  updateLava(x, y, i); break;
-        case MOLTEN: updateMolten(x, y, i); break;
+        case LAVA:  emberCount++; updateLava(x, y, i); break;
+        case MOLTEN: emberCount++; updateMolten(x, y, i); break;
         case SMOKE: updateGas(x, y, i, SMOKE); break;
         case STEAM: updateGas(x, y, i, STEAM); break;
-        case FIRE:  updateFire(x, y, i); break;
+        case FIRE:  fireCount++; updateFire(x, y, i); break;
         case PLANT: updatePlant(x, y, i); break;
         case METAL: updateMetal(x, y, i); break;
         case TNT:   updateTnt(x, y, i); break;
@@ -754,7 +767,10 @@ function render() {
 }
 
 function loop() {
-  if (!paused) step();
+  if (!paused) {
+    step();
+    sound.ambience(fireCount, emberCount, holes.length);
+  }
   render();
   requestAnimationFrame(loop);
 }
@@ -762,10 +778,14 @@ function loop() {
 function paintCircle(cx, cy, type) {
   // A black hole is a single point, however big the brush is. One is plenty.
   if (type === BLACKHOLE) {
-    if (inBounds(cx, cy) && cells[cy * W + cx] === EMPTY) set(cy * W + cx, BLACKHOLE);
-    return;
+    if (inBounds(cx, cy) && cells[cy * W + cx] === EMPTY) {
+      set(cy * W + cx, BLACKHOLE);
+      return 1;
+    }
+    return 0;
   }
   const r = brush;
+  let placed = 0;
   for (let dy = -r; dy <= r; dy++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dy * dy > r * r) continue;
@@ -777,8 +797,19 @@ function paintCircle(cx, cy, type) {
       if (type !== EMPTY && cells[i] !== EMPTY) continue;
       if (type === FIRE && Math.random() < 0.4) continue; // scatter the sparks
       set(i, type, fireHeat);
+      placed++;
     }
   }
+  return placed;
+}
+
+// What a material sounds like coming off the brush.
+function brushSound(type) {
+  if (type === EMPTY) return 'erase';
+  if (isLiquid(type)) return 'liquid';
+  if (isGas(type)) return 'gas';
+  if (DENSITY[type] >= 90) return 'solid';
+  return 'powder';
 }
 
 // --- input ---------------------------------------------------------------
@@ -794,10 +825,11 @@ function cellFromEvent(e) {
 }
 
 canvas.addEventListener('pointerdown', (e) => {
+  sound.unlock(); // audio cannot start until the first real gesture
   drawing = true;
   brushType = e.button === 2 ? EMPTY : current; // right button erases
   const [x, y] = cellFromEvent(e);
-  paintCircle(x, y, brushType);
+  if (paintCircle(x, y, brushType) > 0) sound.paint(brushSound(brushType));
   canvas.setPointerCapture(e.pointerId);
   e.preventDefault();
 });
@@ -805,7 +837,7 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   if (!drawing) return;
   const [x, y] = cellFromEvent(e);
-  paintCircle(x, y, brushType);
+  if (paintCircle(x, y, brushType) > 0) sound.paint(brushSound(brushType));
 });
 
 window.addEventListener('pointerup', () => { drawing = false; });
@@ -878,6 +910,12 @@ document.getElementById('clear').addEventListener('click', () => {
   cells.fill(EMPTY);
   life.fill(0);
   aux.fill(0);
+});
+
+const muteBtn = document.getElementById('mute');
+muteBtn.textContent = sound.on() ? 'Sound: on' : 'Sound: off';
+muteBtn.addEventListener('click', () => {
+  muteBtn.textContent = sound.toggle() ? 'Sound: on' : 'Sound: off';
 });
 
 window.addEventListener('keydown', (e) => {
