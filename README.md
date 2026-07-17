@@ -18,8 +18,9 @@ lives once, in `main.js`.
 
 ## Temperature
 
-- The readout under the sliders is a thermometer for whatever the cursor is
-  over. The View button switches the whole canvas to a heat map.
+- A thermometer tag follows the cursor over the canvas, naming whatever is
+  under it and its temperature. It can be turned off under Options. The
+  View button there switches the whole canvas to a heat map.
 - The Heat and Cool tools in the palette raise or lower temperature under
   the brush without placing anything.
 - Ambient temperature is a setting: Space is 0 K, Cold is winter, Earth is
@@ -139,8 +140,9 @@ semicolon, so use `--add-data "index.html:."` and so on. The binary lands in
 - Right-click and drag to erase.
 - Number keys pick the common materials, 0 is the eraser.
 - Space pauses and resumes.
-- Sliders set brush size and gravity strength; chips set world, gravity
-  mode, ambient temperature, and flame heat.
+- The panel folds into sections: Materials and Brush stay open, World
+  (presets, gravity, ambient) and Options (view, sound, thermometer) expand
+  when you need them.
 - The brush only paints into open space. Fire has to reach fuel through the
   physics, so lay a trail and light one end instead of stamping flame over
   things.

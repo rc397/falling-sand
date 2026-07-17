@@ -1241,7 +1241,40 @@ function render() {
   }
 }
 
-const thermoEl = document.getElementById('thermo');
+// The thermometer is a little tag that follows the cursor around the canvas
+// and names whatever is underneath it, with its temperature.
+const tipEl = document.getElementById('tip');
+const stageEl = document.querySelector('.stage');
+let thermoOn = true;
+try { thermoOn = localStorage.getItem('thermometer') !== 'off'; } catch (e) {}
+let tipX = 0, tipY = 0, tipShown = false;
+
+const NAMES = {};
+for (const m of MATERIALS) NAMES[m.id] = m.name;
+NAMES[STEAM] = 'Steam';
+NAMES[RUST] = 'Rust';
+NAMES[SHARD] = 'Glass shards';
+NAMES[SPARK] = 'Spark';
+NAMES[MOLTEN] = 'Molten metal';
+NAMES[PLASMA] = 'Plasma';
+
+function nameOf(t) {
+  if (t === EMPTY) return ambientK < 20 ? 'Vacuum' : 'Air';
+  return NAMES[t] || 'Something';
+}
+
+function updateTip() {
+  if (!thermoOn || !tipShown || mouseCell < 0) {
+    tipEl.style.display = 'none';
+    return;
+  }
+  tipEl.style.display = 'block';
+  const stageW = stageEl.clientWidth;
+  tipEl.style.left = Math.min(tipX, stageW - 150) + 'px';
+  tipEl.style.top = tipY + 'px';
+  tipEl.textContent = nameOf(cells[mouseCell]) + ', ' + Math.round(temp[mouseCell]) + ' K';
+}
+
 let ticks = 0; // rAF frames, unlike `frame` this advances while paused
 
 function loop() {
@@ -1250,9 +1283,7 @@ function loop() {
     sound.ambience(fireCount, emberCount, holes.length);
   }
   render();
-  if ((++ticks % 6) === 0 && mouseCell >= 0) {
-    thermoEl.textContent = Math.round(temp[mouseCell]) + ' K at cursor';
-  }
+  if ((++ticks % 3) === 0) updateTip();
   requestAnimationFrame(loop);
 }
 
@@ -1335,8 +1366,17 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   const [x, y] = cellFromEvent(e);
   if (inBounds(x, y)) mouseCell = y * W + x;
+  const rect = stageEl.getBoundingClientRect();
+  tipX = e.clientX - rect.left;
+  tipY = e.clientY - rect.top;
+  tipShown = true;
   if (!drawing) return;
   if (paintCircle(x, y, brushType) > 0) sound.paint(brushSound(brushType));
+});
+
+canvas.addEventListener('pointerleave', () => {
+  tipShown = false;
+  tipEl.style.display = 'none';
 });
 
 window.addEventListener('pointerup', () => { drawing = false; });
@@ -1462,6 +1502,14 @@ const viewBtn = document.getElementById('view');
 viewBtn.addEventListener('click', () => {
   viewHeat = !viewHeat;
   viewBtn.textContent = viewHeat ? 'View: heat' : 'View: materials';
+});
+
+const thermoBtn = document.getElementById('thermobtn');
+thermoBtn.textContent = thermoOn ? 'Thermometer: on' : 'Thermometer: off';
+thermoBtn.addEventListener('click', () => {
+  thermoOn = !thermoOn;
+  try { localStorage.setItem('thermometer', thermoOn ? 'on' : 'off'); } catch (e) {}
+  thermoBtn.textContent = thermoOn ? 'Thermometer: on' : 'Thermometer: off';
 });
 
 window.addEventListener('keydown', (e) => {
